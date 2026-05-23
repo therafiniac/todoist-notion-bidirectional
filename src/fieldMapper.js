@@ -17,19 +17,18 @@ const PRIORITY_TODOIST_TO_NOTION = {
 };
 
 // ─── Status Mapping ──────────────────────────────────────────────────────────
-// Notion: "TO DO", "DOING", "DONE"  (select property)
+// Notion: "TO DO", "DOING", "Done"
 // Todoist: is_completed = true/false
-// Rule: DOING is Notion-only. Todoist complete=true → DONE. complete=false → TO DO only if not DOING.
+// Rule: DOING is Notion-only. Todoist complete=true → Done. complete=false → TO DO only if not DOING.
 
 function todoistStatusToNotion(isCompleted, currentNotionStatus) {
-  if (isCompleted) return 'DONE';
-  // If currently DOING in Notion, don't downgrade to TO DO from Todoist side
+  if (isCompleted) return 'Done';
   if (currentNotionStatus === 'DOING') return 'DOING';
   return 'TO DO';
 }
 
 function notionStatusToTodoist(notionStatus) {
-  return notionStatus === 'DONE';
+  return notionStatus === 'Done';
 }
 
 // ─── Notion → Normalized ─────────────────────────────────────────────────────
@@ -53,8 +52,10 @@ function fromTodoist(task) {
   const taskDate = task.due?.date || null;
   const priority = PRIORITY_TODOIST_TO_NOTION[task.priority] || 'P4';
   const isCompleted = task.is_completed || false;
+  // Normalize to a status string so snapshots are always comparable
+  const status = isCompleted ? 'Done' : 'TO DO';
 
-  return { title, taskDate, priority, isCompleted };
+  return { title, taskDate, priority, isCompleted, status };
 }
 
 // ─── Normalized → Notion properties payload ──────────────────────────────────
@@ -100,13 +101,13 @@ function toTodoistPayload(normalized) {
 }
 
 // ─── Snapshot for state comparison ───────────────────────────────────────────
-// Returns a plain object used to detect changes between sync cycles
+// Always uses status string (never isCompleted boolean) so both sides compare equally
 function toSnapshot(normalized) {
   return {
     title: normalized.title,
     taskDate: normalized.taskDate,
     priority: normalized.priority,
-    status: normalized.status || (normalized.isCompleted ? 'DONE' : 'TO DO'),
+    status: normalized.status || (normalized.isCompleted ? 'Done' : 'TO DO'),
   };
 }
 

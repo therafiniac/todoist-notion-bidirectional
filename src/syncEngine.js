@@ -15,24 +15,36 @@ async function runSync() {
   let state = loadState();
 
   // 1. Fetch current data from both sides
-  const [notionPages, todoistTasks] = await Promise.all([
-    notionClient.getAllPages(),
-    todoistClient.getAllTasks(),
-  ]);
+  const [notionPages, todoistActiveTasks, todoistCompletedTasks] =
+    await Promise.all([
+      notionClient.getAllPages(),
+      todoistClient.getAllTasks(),
+      todoistClient.getRecentlyCompletedTasks(),
+    ]);
 
   // Build lookup maps
-  const activeTodoistMap = new Map(todoistTasks.map((t) => [String(t.id), t]));
   const activeNotionMap = new Map(
     notionPages.filter((p) => !p.archived).map((p) => [p.id, p]),
   );
 
-  // Track IDs created this cycle to skip them in deletion check
+  // Combined todoist map: active + recently completed
+  const allTodoistMap = new Map(
+    todoistActiveTasks.map((t) => [String(t.id), t]),
+  );
+  for (const t of todoistCompletedTasks) {
+    allTodoistMap.set(String(t.id), t);
+  }
+  const activeTodoistMap = new Map(
+    todoistActiveTasks.map((t) => [String(t.id), t]),
+  );
+
+  // Track IDs created this cycle to skip in deletion check
   const createdThisCycle = new Set();
 
-  // 2. Todoist → Notion (new tasks in Todoist not yet in state)
-  await syncTodoistToNotion(state, todoistTasks, createdThisCycle);
+  // 2. CREATE: Todoist → Notion (new tasks not yet in state)
+  await syncTodoistToNotion(state, todoistActiveTasks, createdThisCycle);
 
-  // 3. Notion → Todoist (new pages in Notion not yet in state)
+  // 3. CREATE: Notion → Todoist (new pages not yet in state)
   await syncNotionToTodoist(
     state,
     notionPages,
@@ -40,14 +52,15 @@ async function runSync() {
     createdThisCycle,
   );
 
-  // 4. Handle updates (tasks already in state, check for changes)
-  await handleUpdates(state, activeTodoistMap, activeNotionMap);
+  // 4. UPDATE: tasks already linked in state, check for changes
+  await handleUpdates(state, allTodoistMap, activeNotionMap);
 
-  // 5. Handle deletions (only tasks in state that are gone from BOTH fetch results)
-  await handleDeletions(
+  // 5. DELETIONS & COMPLETIONS
+  await handleDeletionsAndCompletions(
     state,
     activeNotionMap,
     activeTodoistMap,
+    allTodoistMap,
     createdThisCycle,
   );
 
@@ -62,24 +75,19 @@ async function runSync() {
 async function syncTodoistToNotion(state, todoistTasks, createdThisCycle) {
   for (const task of todoistTasks) {
     const taskId = String(task.id);
-
-    // Skip if already tracked in state
     if (findByTodoistId(state, taskId)) continue;
 
     const normalized = fieldMapper.fromTodoist(task);
-
     try {
       const properties = fieldMapper.toNotionProperties(normalized);
       const page = await notionClient.createPage(properties);
       await notionClient.setTodoistId(page.id, taskId);
 
-      // Save to state IMMEDIATELY after creation
       state.tasks[taskId] = {
         notionPageId: page.id,
         lastKnownState: fieldMapper.toSnapshot(normalized),
       };
       saveState(state);
-
       createdThisCycle.add(taskId);
       console.log(`  ➕ Todoist→Notion CREATE: "${normalized.title}"`);
     } catch (err) {
@@ -100,33 +108,26 @@ async function syncNotionToTodoist(
 ) {
   for (const page of notionPages) {
     if (page.archived) continue;
-
     const pageId = page.id;
-
-    // Skip if already tracked in state
     if (findByNotionId(state, pageId)) continue;
 
     const normalized = fieldMapper.fromNotion(page);
-
     try {
       const payload = fieldMapper.toTodoistPayload(normalized);
       const task = await todoistClient.createTask(payload);
       const taskId = String(task.id);
 
-      if (normalized.status === 'DONE') {
+      if (normalized.status === 'Done') {
         await todoistClient.closeTask(taskId);
       }
 
-      // Store Todoist ID back in Notion page
       await notionClient.setTodoistId(pageId, taskId);
 
-      // Save to state IMMEDIATELY after creation
       state.tasks[taskId] = {
         notionPageId: pageId,
         lastKnownState: fieldMapper.toSnapshot(normalized),
       };
       saveState(state);
-
       createdThisCycle.add(taskId);
       console.log(`  ➕ Notion→Todoist CREATE: "${normalized.title}"`);
     } catch (err) {
@@ -138,10 +139,10 @@ async function syncNotionToTodoist(
   }
 }
 
-// ─── Handle Updates (tasks already linked in state) ───────────────────────────
-async function handleUpdates(state, activeTodoistMap, activeNotionMap) {
+// ─── Handle Updates ───────────────────────────────────────────────────────────
+async function handleUpdates(state, allTodoistMap, activeNotionMap) {
   for (const [todoistId, entry] of Object.entries(state.tasks)) {
-    const todoistTask = activeTodoistMap.get(todoistId);
+    const todoistTask = allTodoistMap.get(todoistId);
     const notionPage = activeNotionMap.get(entry.notionPageId);
 
     if (!todoistTask || !notionPage) continue;
@@ -176,7 +177,7 @@ async function handleUpdates(state, activeTodoistMap, activeNotionMap) {
         );
       } catch (err) {
         console.error(
-          `  ❌ Failed to update Notion for "${todoistNormalized.title}":`,
+          `  ❌ Update Notion failed for "${todoistNormalized.title}":`,
           err.message,
         );
       }
@@ -186,9 +187,8 @@ async function handleUpdates(state, activeTodoistMap, activeNotionMap) {
         const payload = fieldMapper.toTodoistPayload(notionNormalized);
         await todoistClient.updateTask(todoistId, payload);
 
-        // Handle completion status change
-        const wasCompleted = oldSnapshot.status === 'DONE';
-        const isNowCompleted = notionNormalized.status === 'DONE';
+        const wasCompleted = oldSnapshot.status === 'Done';
+        const isNowCompleted = notionNormalized.status === 'Done';
         if (!wasCompleted && isNowCompleted) {
           await todoistClient.closeTask(todoistId);
         } else if (wasCompleted && !isNowCompleted) {
@@ -200,12 +200,12 @@ async function handleUpdates(state, activeTodoistMap, activeNotionMap) {
         console.log(`  ✏️  Notion→Todoist UPDATE: "${notionNormalized.title}"`);
       } catch (err) {
         console.error(
-          `  ❌ Failed to update Todoist for "${notionNormalized.title}":`,
+          `  ❌ Update Todoist failed for "${notionNormalized.title}":`,
           err.message,
         );
       }
     } else if (todoistChanged && notionChanged) {
-      // Conflict: both changed → Todoist wins
+      // Conflict → Todoist wins
       try {
         const properties = fieldMapper.toNotionProperties(
           todoistNormalized,
@@ -227,22 +227,41 @@ async function handleUpdates(state, activeTodoistMap, activeNotionMap) {
   }
 }
 
-// ─── Deletion Handler ─────────────────────────────────────────────────────────
-async function handleDeletions(
+// ─── Deletions & Completions ──────────────────────────────────────────────────
+async function handleDeletionsAndCompletions(
   state,
   activeNotionMap,
   activeTodoistMap,
+  allTodoistMap,
   createdThisCycle,
 ) {
   for (const [todoistId, entry] of Object.entries(state.tasks)) {
-    // Never delete something created this very cycle
     if (createdThisCycle.has(todoistId)) continue;
 
     const notionExists = activeNotionMap.has(entry.notionPageId);
-    const todoistExists = activeTodoistMap.has(todoistId);
+    const isActiveInTodoist = activeTodoistMap.has(todoistId);
+    const isCompletedInTodoist =
+      allTodoistMap.has(todoistId) && allTodoistMap.get(todoistId).is_completed;
 
-    if (!notionExists && todoistExists) {
-      // Notion page was deleted → delete Todoist task
+    // ── Todoist task was COMPLETED (not deleted) → update Notion to DONE ──
+    if (!isActiveInTodoist && isCompletedInTodoist && notionExists) {
+      try {
+        await notionClient.updatePage(entry.notionPageId, {
+          Status: { status: { name: 'Done' } },
+        });
+        entry.lastKnownState = { ...entry.lastKnownState, status: 'Done' };
+        saveState(state);
+        console.log(
+          `  ✅ Todoist completed → Notion DONE: "${entry.lastKnownState.title}"`,
+        );
+      } catch (err) {
+        console.error(`  ❌ Failed to mark Notion DONE:`, err.message);
+      }
+      continue;
+    }
+
+    // ── Notion page deleted → delete Todoist task ──
+    if (!notionExists && isActiveInTodoist) {
       try {
         await todoistClient.deleteTask(todoistId);
         delete state.tasks[todoistId];
@@ -254,21 +273,30 @@ async function handleDeletions(
           err.message,
         );
       }
-    } else if (todoistExists === false && notionExists) {
-      // Todoist task was deleted → archive Notion page
+      continue;
+    }
+
+    // ── Todoist task truly deleted (not completed) → archive Notion page ──
+    // Skip if last known status was already Done — it was completed intentionally
+    if (
+      !isActiveInTodoist &&
+      !isCompletedInTodoist &&
+      notionExists &&
+      entry.lastKnownState?.status !== 'Done'
+    ) {
       try {
         await notionClient.deletePage(entry.notionPageId);
         delete state.tasks[todoistId];
         saveState(state);
         console.log(`  🗑️  Todoist deleted → Notion page archived`);
       } catch (err) {
-        console.error(
-          `  ❌ Failed to archive Notion page ${entry.notionPageId}:`,
-          err.message,
-        );
+        console.error(`  ❌ Failed to archive Notion page:`, err.message);
       }
-    } else if (!notionExists && !todoistExists) {
-      // Both gone → clean up state only
+      continue;
+    }
+
+    // ── Both gone → clean up state ──
+    if (!notionExists && !isActiveInTodoist && !isCompletedInTodoist) {
       delete state.tasks[todoistId];
       saveState(state);
     }
