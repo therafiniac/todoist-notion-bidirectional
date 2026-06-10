@@ -1,4 +1,15 @@
-node_modules
+# Dependencies
+node_modules/
+
+# Environment variables (contains API tokens)
 .env
+
+# Runtime state (contains personal task IDs)
 sync-state.json
+
+# Logs
+logs/
+
+# Windows
 .DS_Store
+Thumbs.db

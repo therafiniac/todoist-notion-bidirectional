@@ -1,3 +1,7 @@
+// Force unbuffered stdout so logs write immediately to file
+if (process.stdout._handle) process.stdout._handle.setBlocking(true);
+if (process.stderr._handle) process.stderr._handle.setBlocking(true);
+
 require('dotenv').config();
 const cron = require('node-cron');
 const notionClient = require('./notionClient');
