@@ -55,7 +55,7 @@ Each run (every minute) follows five steps:
 4. **UPDATE** — Merge both sides field by field against the last known state and push only the differences. Same field changed on both sides → later edit wins.
 5. **DELETIONS & COMPLETIONS** — Handle task deletions and completions on either side.
 
-State is saved to D1 immediately after every create, so a failure mid-run cannot cause duplicate creation.
+State is written to D1 once per run, plus immediately after every create, so a failure mid-run cannot cause duplicate creation.
 
 ## Notion Database Schema
 
@@ -151,7 +151,8 @@ Note: local runs call the real Notion and Todoist APIs.
 | Worker requests | 100k/day | 1,440 cron runs/day |
 | Subrequests per run | 50 | capped at 45 by `budget.js` |
 | CPU time per run | 10 ms | network waits do not count |
-| D1 writes | 100k/day | ~1,500/day |
+| D1 queries per run | 50 | ≤ ~30 |
+| D1 rows written | 100k/day | ~4,500/day |
 
 ## Key Implementation Notes
 

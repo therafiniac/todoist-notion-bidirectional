@@ -5,7 +5,9 @@ export function createFakeDb() {
   const db = {
     stateRow: null,
     lockedUntil: 0,
+    queries: 0,
     prepare(sql) {
+      db.queries += 1;
       let args = [];
       const stmt = {
         bind(...values) {
