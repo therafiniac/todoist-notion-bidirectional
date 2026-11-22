@@ -10,6 +10,7 @@ A state-managed synchronization engine that keeps tasks in sync between a Notion
   - **Status:** Maps Notion's native `status` property (`TO DO`, `DOING`, `Done`) to Todoist's completion state. `DOING` is Notion-only and is preserved.
   - **Priority:** Maps Notion select labels (`P1`–`P4`) to Todoist priority levels (`4`–`1`).
   - **Dates:** Syncs task due dates between both platforms.
+  - **Type ↔ Project:** Notion `Type` (`Personal` / `Professional`) maps to the Todoist project of the same name. Tasks in other Todoist projects sync with an empty Type; Notion pages with an empty Type go to the Todoist Inbox.
 - **Conflict Resolution:** When both sides change between runs, Todoist is the source of truth.
 - **Deletion Handling:**
   - Deleting a Notion page → deletes the corresponding Todoist task.
@@ -61,6 +62,7 @@ Your Notion database must have these exact properties:
 | `Task Date` | Date | Due date |
 | `Priority` | Select | `P1`, `P2`, `P3`, `P4` |
 | `Status` | Status (native) | `TO DO`, `DOING`, `Done` |
+| `Type` | Select | `Personal`, `Professional` |
 | `Todoist ID` | Text | Filled in by the sync |
 
 ## Setup & Deployment
@@ -68,6 +70,7 @@ Your Notion database must have these exact properties:
 ### 1. Prerequisites
 - [Notion Integration Token](https://www.notion.so/my-integrations) with access to your database.
 - [Todoist API Token](https://developer.todoist.com/app-console.html).
+- Todoist projects named exactly `Personal` and `Professional`.
 - A free Cloudflare account.
 - Node.js 22+.
 

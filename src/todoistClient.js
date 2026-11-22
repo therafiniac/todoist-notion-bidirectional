@@ -70,6 +70,16 @@ export function createTodoistClient({ token, budget }) {
       }
     },
 
+    // All active projects (id, name, inbox_project), following pagination
+    async getProjects() {
+      return collectPages((cursor) => call('GET', `/projects?${pageQuery(cursor)}`));
+    },
+
+    // Moving between projects needs its own endpoint; update can't change project_id
+    async moveTask(taskId, projectId) {
+      await call('POST', `/tasks/${taskId}/move`, { project_id: projectId });
+    },
+
     createTask(payload) {
       return call('POST', '/tasks', payload);
     },

@@ -44,7 +44,7 @@ test('creates a Todoist task for a new Notion page and records the link', async 
 
   const state = await sync(fakes, db);
 
-  assert.deepEqual(fakes.names().filter((n) => !n.includes('getAll') && !n.includes('Completed')), [
+  assert.deepEqual(fakes.names().filter((n) => !n.startsWith('notion.getAll') && !n.startsWith('todoist.get')), [
     'todoist.createTask',
     'notion.setTodoistId',
   ]);
@@ -86,8 +86,8 @@ test('defers work beyond the subrequest budget instead of failing', async () => 
   const state = await sync(fakes, createFakeDb());
 
   assert.ok(fakes.budget.used <= 20);
-  // 3 fetches; each create reserves 3 but spends 2 (no close) → 8 fit in 20
-  assert.equal(Object.keys(state.tasks).length, 8);
+  // 4 fetches; each create reserves 3 but spends 2 (no close) → 7 fit in 20
+  assert.equal(Object.keys(state.tasks).length, 7);
 });
 
 test('lock prevents overlapping runs and is released', async () => {
