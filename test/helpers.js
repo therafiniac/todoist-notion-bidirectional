@@ -41,7 +41,7 @@ export function createFakeDb() {
   return db;
 }
 
-export function notionPage({ id, title, date = null, priority = 'P4', status = 'TO DO', archived = false }) {
+export function notionPage({ id, title, date = null, priority = 'P4', status = 'TO DO', type = null, archived = false }) {
   return {
     id,
     archived,
@@ -50,13 +50,21 @@ export function notionPage({ id, title, date = null, priority = 'P4', status = '
       'Task Date': { date: date ? { start: date } : null },
       Priority: { select: { name: priority } },
       Status: { status: { name: status } },
+      Type: { select: type ? { name: type } : null },
     },
   };
 }
 
 // Fake API clients that record every write and charge the shared budget per call,
 // mirroring the real clients.
-export function createFakes({ notionPages = [], todoistTasks = [], completedTasks = [], limit = 45 } = {}) {
+export const PROJECTS = [
+  { id: 'inbox', name: 'Inbox', inbox_project: true },
+  { id: 'proj-personal', name: 'Personal' },
+  { id: 'proj-professional', name: 'Professional' },
+  { id: 'proj-shopping', name: 'Shopping' },
+];
+
+export function createFakes({ notionPages = [], todoistTasks = [], completedTasks = [], projects = PROJECTS, limit = 45 } = {}) {
   const budget = new SubrequestBudget(limit, async () => {
     throw new Error('real fetch must not be called in tests');
   });
@@ -97,6 +105,13 @@ export function createFakes({ notionPages = [], todoistTasks = [], completedTask
     async getRecentlyCompletedTasks() {
       spend('todoist.getRecentlyCompletedTasks', []);
       return completedTasks;
+    },
+    async getProjects() {
+      spend('todoist.getProjects', []);
+      return projects;
+    },
+    async moveTask(id, projectId) {
+      spend('todoist.moveTask', [id, projectId]);
     },
     async createTask(payload) {
       spend('todoist.createTask', [payload]);

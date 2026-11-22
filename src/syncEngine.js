@@ -8,7 +8,7 @@ const COST = {
   createInNotion: 1,
   createInTodoist: 3, // create + close (if Done) + write Todoist ID to Notion
   updateNotion: 1,
-  updateTodoist: 2, // update + close/reopen
+  updateTodoist: 3, // update + move project (Type) + close/reopen
   delete: 1,
 };
 
@@ -21,12 +21,14 @@ export async function runSync(ctx) {
   ctx.deferred = 0;
 
   // 1. Fetch current data from both sides
-  const [notionPages, todoistActiveTasks, todoistCompletedTasks] =
+  const [notionPages, todoistActiveTasks, todoistCompletedTasks, projects] =
     await Promise.all([
       ctx.notion.getAllPages(),
       ctx.todoist.getAllTasks(),
       ctx.todoist.getRecentlyCompletedTasks(),
+      ctx.todoist.getProjects(),
     ]);
+  ctx.projects = buildProjectIndex(projects);
 
   // Build lookup maps
   const activeNotionMap = new Map(
@@ -81,6 +83,26 @@ export async function runSync(ctx) {
   );
 }
 
+// Type ↔ project lookup: project names by ID, project IDs by Type, and the Inbox.
+function buildProjectIndex(projects) {
+  const names = new Map(projects.map((p) => [String(p.id), p.name]));
+  const idByType = {};
+  for (const type of fieldMapper.TYPE_VALUES) {
+    const project = projects.find((p) => p.name === type);
+    if (project) idByType[type] = String(project.id);
+    else console.error(`  ⚠️  Todoist project "${type}" not found; tasks with this Type are skipped.`);
+  }
+  const inbox = projects.find((p) => p.inbox_project);
+  return { names, idByType, inboxId: inbox ? String(inbox.id) : null };
+}
+
+// Todoist project for a Notion Type: the matching project, or the Inbox when empty.
+// Returns undefined if the target project can't be resolved.
+function projectIdForType(ctx, type) {
+  if (!type) return ctx.projects.inboxId ?? undefined;
+  return ctx.projects.idByType[type];
+}
+
 function canAfford(ctx, cost) {
   if (ctx.budget.has(cost)) return true;
   ctx.deferred += 1;
@@ -95,7 +117,7 @@ async function syncTodoistToNotion(ctx, todoistTasks, createdThisCycle) {
     if (findByTodoistId(state, taskId)) continue;
     if (!canAfford(ctx, COST.createInNotion)) continue;
 
-    const normalized = fieldMapper.fromTodoist(task);
+    const normalized = fieldMapper.fromTodoist(task, ctx.projects.names);
     try {
       const properties = {
         ...fieldMapper.toNotionProperties(normalized),
@@ -129,8 +151,14 @@ async function syncNotionToTodoist(ctx, notionPages, createdThisCycle) {
     if (!canAfford(ctx, COST.createInTodoist)) continue;
 
     const normalized = fieldMapper.fromNotion(page);
+    // Empty Type → no project_id → Todoist puts the task in the Inbox
+    const projectId = normalized.type ? ctx.projects.idByType[normalized.type] : null;
+    if (projectId === undefined) continue;
     try {
-      const payload = fieldMapper.toTodoistPayload(normalized);
+      const payload = {
+        ...fieldMapper.toTodoistPayload(normalized),
+        ...(projectId ? { project_id: projectId } : {}),
+      };
       const task = await ctx.todoist.createTask(payload);
       const taskId = String(task.id);
 
@@ -165,11 +193,18 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
 
     if (!todoistTask || !notionPage) continue;
 
-    const todoistNormalized = fieldMapper.fromTodoist(todoistTask);
+    const todoistNormalized = fieldMapper.fromTodoist(
+      todoistTask,
+      ctx.projects.names,
+    );
     const notionNormalized = fieldMapper.fromNotion(notionPage);
     const todoistSnapshot = fieldMapper.toSnapshot(todoistNormalized);
     const notionSnapshot = fieldMapper.toSnapshot(notionNormalized);
     const oldSnapshot = entry.lastKnownState;
+    // State saved before Type was synced has no `type`. Use Todoist's value as
+    // the baseline so a differing Notion Type reads as a Notion change: Notion's
+    // existing Type is kept and the Todoist task is moved to match.
+    if (!('type' in oldSnapshot)) oldSnapshot.type = todoistNormalized.type;
 
     const todoistChanged = !fieldMapper.snapshotsAreEqual(
       oldSnapshot,
@@ -203,8 +238,22 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
       // Notion changed → push to Todoist
       if (!canAfford(ctx, COST.updateTodoist)) continue;
       try {
+        const typeChanged = (oldSnapshot.type ?? null) !== notionNormalized.type;
+        const targetProjectId = typeChanged
+          ? projectIdForType(ctx, notionNormalized.type)
+          : null;
+        if (targetProjectId === undefined) {
+          console.error(
+            `  ⚠️  No Todoist project for Type "${notionNormalized.type ?? 'empty (Inbox)'}"; skipping "${notionNormalized.title}"`,
+          );
+          continue;
+        }
+
         const payload = fieldMapper.toTodoistPayload(notionNormalized);
         await ctx.todoist.updateTask(todoistId, payload);
+        if (targetProjectId) {
+          await ctx.todoist.moveTask(todoistId, targetProjectId);
+        }
 
         const wasCompleted = oldSnapshot.status === 'Done';
         const isNowCompleted = notionNormalized.status === 'Done';

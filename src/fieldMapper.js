@@ -16,6 +16,17 @@ const PRIORITY_TODOIST_TO_NOTION = {
   1: 'P4',
 };
 
+// ─── Type Mapping ────────────────────────────────────────────────────────────
+// Notion: "Type" select → Todoist project with exactly the same name.
+// Tasks in any other Todoist project sync with an empty Type.
+// A Notion page with an empty Type goes to the Todoist Inbox.
+
+export const TYPE_VALUES = ['Personal', 'Professional'];
+
+export function typeFromProjectName(projectName) {
+  return TYPE_VALUES.includes(projectName) ? projectName : null;
+}
+
 // ─── Status Mapping ──────────────────────────────────────────────────────────
 // Notion: "TO DO", "DOING", "Done"
 // Todoist: checked = true/false
@@ -48,19 +59,23 @@ export function fromNotion(page) {
 
   const status = props['Status']?.status?.name || 'TO DO';
 
-  return { title, taskDate, priority, status };
+  const type = props['Type']?.select?.name || null;
+
+  return { title, taskDate, priority, status, type };
 }
 
 // ─── Todoist → Normalized ────────────────────────────────────────────────────
-export function fromTodoist(task) {
+// projectNames: Map of Todoist project ID → project name
+export function fromTodoist(task, projectNames = new Map()) {
   const title = task.content || '';
   const taskDate = task.due?.date || null;
   const priority = PRIORITY_TODOIST_TO_NOTION[task.priority] || 'P4';
   const isCompleted = isTodoistTaskCompleted(task);
   // Normalize to a status string so snapshots are always comparable
   const status = isCompleted ? 'Done' : 'TO DO';
+  const type = typeFromProjectName(projectNames.get(String(task.project_id)));
 
-  return { title, taskDate, priority, isCompleted, status };
+  return { title, taskDate, priority, isCompleted, status, type };
 }
 
 // ─── Normalized → Notion properties payload ──────────────────────────────────
@@ -79,6 +94,9 @@ export function toNotionProperties(normalized, currentNotionStatus = 'TO DO') {
     },
     Status: {
       status: { name: status },
+    },
+    Type: {
+      select: normalized.type ? { name: normalized.type } : null,
     },
   };
 
@@ -113,9 +131,12 @@ export function toSnapshot(normalized) {
     taskDate: normalized.taskDate,
     priority: normalized.priority,
     status: normalized.status || (normalized.isCompleted ? 'Done' : 'TO DO'),
+    type: normalized.type ?? null,
   };
 }
 
+const SNAPSHOT_FIELDS = ['title', 'taskDate', 'priority', 'status', 'type'];
+
 export function snapshotsAreEqual(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return SNAPSHOT_FIELDS.every((field) => (a?.[field] ?? null) === (b?.[field] ?? null));
 }
