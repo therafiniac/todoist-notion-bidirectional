@@ -13,3 +13,7 @@ logs/
 # Windows
 .DS_Store
 Thumbs.db
+
+# Cloudflare Wrangler
+.wrangler/
+.dev.vars

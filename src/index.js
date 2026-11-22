@@ -1,57 +1,59 @@
-// Force unbuffered stdout so logs write immediately to file
-if (process.stdout._handle) process.stdout._handle.setBlocking(true);
-if (process.stderr._handle) process.stderr._handle.setBlocking(true);
+import { SubrequestBudget } from './budget.js';
+import { createNotionClient } from './notionClient.js';
+import { createTodoistClient } from './todoistClient.js';
+import {
+  loadState,
+  acquireLock,
+  releaseLock,
+} from './stateManager.js';
+import { runSync } from './syncEngine.js';
 
-require('dotenv').config();
-const cron = require('node-cron');
-const notionClient = require('./notionClient');
-const { runSync } = require('./syncEngine');
+const REQUIRED_ENV = ['NOTION_TOKEN', 'NOTION_DATABASE_ID', 'TODOIST_API_TOKEN'];
 
-// ─── Validate environment variables ──────────────────────────────────────────
-const REQUIRED_ENV = [
-  'NOTION_TOKEN',
-  'NOTION_DATABASE_ID',
-  'TODOIST_API_TOKEN',
-];
-const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
+async function runScheduledSync(env) {
+  const missing = REQUIRED_ENV.filter((key) => !env[key]);
+  if (missing.length > 0) {
+    console.error(`❌ Missing required secrets: ${missing.join(', ')}`);
+    return;
+  }
 
-if (missing.length > 0) {
-  console.error(
-    `❌ Missing required environment variables: ${missing.join(', ')}`,
-  );
-  console.error(`   Copy .env.example to .env and fill in your credentials.`);
-  process.exit(1);
+  if (!(await acquireLock(env.DB))) {
+    console.log('⏭️  Previous sync still running, skipping this run.');
+    return;
+  }
+
+  try {
+    const budget = new SubrequestBudget();
+    await runSync({
+      db: env.DB,
+      budget,
+      state: await loadState(env.DB),
+      notion: createNotionClient({
+        token: env.NOTION_TOKEN,
+        databaseId: env.NOTION_DATABASE_ID,
+        budget,
+      }),
+      todoist: createTodoistClient({ token: env.TODOIST_API_TOKEN, budget }),
+    });
+  } catch (err) {
+    console.error('❌ Sync cycle failed:', err.message);
+  } finally {
+    await releaseLock(env.DB);
+  }
 }
 
-// ─── Init Notion client ───────────────────────────────────────────────────────
-notionClient.init();
+export default {
+  async scheduled(_controller, env, ctx) {
+    ctx.waitUntil(runScheduledSync(env));
+  },
 
-// ─── Polling interval ─────────────────────────────────────────────────────────
-const POLL_SECONDS = parseInt(process.env.POLL_INTERVAL_SECONDS || '30', 10);
-
-console.log('🚀 Notion ↔ Todoist Sync Engine started');
-console.log(`   Polling every ${POLL_SECONDS} seconds`);
-console.log(`   Database ID: ${process.env.NOTION_DATABASE_ID}`);
-console.log('─'.repeat(50));
-
-// ─── Run immediately on start, then on schedule ───────────────────────────────
-runSync().catch(console.error);
-
-// node-cron needs a cron expression. We convert seconds to a cron expression.
-// For intervals < 60s, we use setInterval instead since cron only supports minutes+.
-if (POLL_SECONDS < 60) {
-  setInterval(() => {
-    runSync().catch(console.error);
-  }, POLL_SECONDS * 1000);
-} else {
-  const minutes = Math.floor(POLL_SECONDS / 60);
-  cron.schedule(`*/${minutes} * * * *`, () => {
-    runSync().catch(console.error);
-  });
-}
-
-// ─── Graceful shutdown ────────────────────────────────────────────────────────
-process.on('SIGINT', () => {
-  console.log('\n👋 Sync engine stopped.');
-  process.exit(0);
-});
+  // Minimal health check; exposes only the last sync time.
+  async fetch(request, env) {
+    const { pathname } = new URL(request.url);
+    if (request.method !== 'GET' || pathname !== '/health') {
+      return new Response('Not found', { status: 404 });
+    }
+    const state = await loadState(env.DB);
+    return Response.json({ ok: true, lastSyncedAt: state.lastSyncedAt });
+  },
+};
