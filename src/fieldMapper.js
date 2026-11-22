@@ -53,6 +53,33 @@ export function toDateOnly(value) {
   return value ? String(value).slice(0, 10) : null;
 }
 
+// ─── Description & Tags ──────────────────────────────────────────────────────
+// Notion `Description` (Text) ↔ Todoist `description` (plain text).
+// Notion `Tags` (Multi-select) ↔ Todoist `labels`, matched by exact name.
+// Notion option names can't contain commas, so such labels stay Todoist-only.
+
+const NOTION_TEXT_CHUNK = 2000; // Notion's limit per rich-text segment
+
+export function isSyncableTag(name) {
+  return typeof name === 'string' && name.length > 0 && !name.includes(',');
+}
+
+export function normalizeTags(names) {
+  return [...new Set((names || []).filter(isSyncableTag))].sort();
+}
+
+function joinRichText(segments) {
+  return (segments || []).map((segment) => segment.plain_text || '').join('');
+}
+
+function toRichText(text) {
+  const chunks = [];
+  for (let i = 0; i < text.length; i += NOTION_TEXT_CHUNK) {
+    chunks.push({ text: { content: text.slice(i, i + NOTION_TEXT_CHUNK) } });
+  }
+  return chunks;
+}
+
 // ─── Notion → Normalized ─────────────────────────────────────────────────────
 export function fromNotion(page) {
   const props = page.properties;
@@ -71,7 +98,11 @@ export function fromNotion(page) {
 
   const type = props['Type']?.select?.name || null;
 
-  return { title, taskDate, priority, status, type };
+  const description = joinRichText(props['Description']?.rich_text).trim();
+
+  const tags = normalizeTags((props['Tags']?.multi_select || []).map((option) => option.name));
+
+  return { title, taskDate, priority, status, type, description, tags };
 }
 
 // The Todoist task ID the sync stored on a Notion page, if any
@@ -91,8 +122,10 @@ export function fromTodoist(task, projectNames = new Map()) {
   // Normalize to a status string so snapshots are always comparable
   const status = isCompleted ? 'Done' : 'TO DO';
   const type = typeFromProjectName(projectNames.get(String(task.project_id)));
+  const description = (task.description || '').trim();
+  const tags = normalizeTags(task.labels);
 
-  return { title, taskDate, priority, isCompleted, status, type };
+  return { title, taskDate, priority, isCompleted, status, type, description, tags };
 }
 
 // ─── Normalized → Notion properties payload ──────────────────────────────────
@@ -115,6 +148,12 @@ export function toNotionProperties(normalized, currentNotionStatus = 'TO DO') {
     Type: {
       select: normalized.type ? { name: normalized.type } : null,
     },
+    Description: {
+      rich_text: toRichText(normalized.description || ''),
+    },
+    Tags: {
+      multi_select: (normalized.tags || []).map((name) => ({ name })),
+    },
   };
 
   if (normalized.taskDate) {
@@ -136,6 +175,8 @@ export function toTodoistPayload(normalized) {
   if (normalized.taskDate) {
     payload.due_date = normalized.taskDate;
   }
+  if (normalized.description) payload.description = normalized.description;
+  if (normalized.tags?.length) payload.labels = normalized.tags;
 
   return payload;
 }
@@ -143,7 +184,9 @@ export function toTodoistPayload(normalized) {
 // Update payload with only the fields that changed. Unchanged fields are left out
 // so Todoist keeps them as they are (e.g. a recurring due date isn't re-sent).
 // Todoist v1 has no documented null for due dates; "no date" clears it (as in v2).
-export function toTodoistUpdatePayload(merged, current) {
+// `labels` replaces the whole list, so labels the sync can't represent (commas)
+// are carried over from `currentLabels` (the task's raw labels).
+export function toTodoistUpdatePayload(merged, current, currentLabels = []) {
   const payload = {};
   if (merged.title !== current.title) payload.content = merged.title;
   if (merged.priority !== current.priority) {
@@ -152,6 +195,13 @@ export function toTodoistUpdatePayload(merged, current) {
   if ((merged.taskDate ?? null) !== (current.taskDate ?? null)) {
     if (merged.taskDate) payload.due_date = merged.taskDate;
     else payload.due_string = 'no date';
+  }
+  if ((merged.description || '') !== (current.description || '')) {
+    payload.description = merged.description || '';
+  }
+  if (!fieldEqual(merged.tags, current.tags)) {
+    const kept = (currentLabels || []).filter((name) => !isSyncableTag(name));
+    payload.labels = [...(merged.tags || []), ...kept];
   }
   return payload;
 }
@@ -165,6 +215,8 @@ export function toSnapshot(normalized) {
     priority: normalized.priority,
     status: normalized.status || (normalized.isCompleted ? 'Done' : 'TO DO'),
     type: normalized.type ?? null,
+    description: normalized.description ?? '',
+    tags: normalizeTags(normalized.tags),
   };
 }
 
@@ -175,10 +227,31 @@ export function asTodoistSees(snapshot) {
   return snapshot?.status === 'DOING' ? { ...snapshot, status: 'TO DO' } : snapshot;
 }
 
-const SNAPSHOT_FIELDS = ['title', 'taskDate', 'priority', 'status', 'type'];
+const SNAPSHOT_FIELDS = ['title', 'taskDate', 'priority', 'status', 'type', 'description', 'tags'];
+
+function fieldEqual(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return JSON.stringify(normalizeTags(a)) === JSON.stringify(normalizeTags(b));
+  }
+  return (a ?? null) === (b ?? null);
+}
 
 export function snapshotsAreEqual(a, b) {
-  return SNAPSHOT_FIELDS.every((field) => (a?.[field] ?? null) === (b?.[field] ?? null));
+  return SNAPSHOT_FIELDS.every((field) => fieldEqual(a?.[field], b?.[field]));
+}
+
+// Per-tag merge: start from the last known tags and apply each side's additions
+// and removals. Adding a tag on one side and removing another on the other keeps
+// both changes; the two sides can never disagree about the same tag.
+function mergeTags(old, notion, todoist) {
+  const base = new Set(normalizeTags(old));
+  const result = new Set(base);
+  for (const side of [normalizeTags(notion), normalizeTags(todoist)]) {
+    const current = new Set(side);
+    for (const tag of current) if (!base.has(tag)) result.add(tag);
+    for (const tag of base) if (!current.has(tag)) result.delete(tag);
+  }
+  return [...result].sort();
 }
 
 // ─── Field-level merge ───────────────────────────────────────────────────────
@@ -187,6 +260,7 @@ export function snapshotsAreEqual(a, b) {
 // - a field changed on both sides to different values → the later edit wins
 //   (Notion last_edited_time vs Todoist updated_at; a tie or missing time → Todoist)
 // Todoist's side is compared through asTodoistSees, since it can't show DOING.
+// Tags are merged per tag instead (see mergeTags).
 export function mergeSnapshots({ old, notion, todoist, notionEditedAt, todoistEditedAt }) {
   const oldForTodoist = asTodoistSees(old);
   const notionForTodoist = asTodoistSees(notion);
@@ -199,11 +273,15 @@ export function mergeSnapshots({ old, notion, todoist, notionEditedAt, todoistEd
   const conflicts = [];
 
   for (const field of SNAPSHOT_FIELDS) {
+    if (field === 'tags') {
+      merged.tags = mergeTags(old?.tags, notion.tags, todoist.tags);
+      continue;
+    }
     const notionValue = notion[field] ?? null;
     const todoistValue = todoist[field] ?? null;
-    const notionChanged = (old?.[field] ?? null) !== notionValue;
-    const todoistChanged = (oldForTodoist?.[field] ?? null) !== todoistValue;
-    const sameResult = (notionForTodoist[field] ?? null) === todoistValue;
+    const notionChanged = !fieldEqual(old?.[field], notionValue);
+    const todoistChanged = !fieldEqual(oldForTodoist?.[field], todoistValue);
+    const sameResult = fieldEqual(notionForTodoist[field], todoistValue);
 
     let takeTodoist;
     if (notionChanged && todoistChanged && !sameResult) {

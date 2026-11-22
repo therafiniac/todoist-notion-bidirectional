@@ -43,7 +43,7 @@ export function createFakeDb() {
   return db;
 }
 
-export function notionPage({ id, title, date = null, priority = 'P4', status = 'TO DO', type = null, todoistId = null, archived = false }) {
+export function notionPage({ id, title, date = null, priority = 'P4', status = 'TO DO', type = null, todoistId = null, description = '', tags = [], archived = false }) {
   return {
     id,
     archived,
@@ -54,6 +54,8 @@ export function notionPage({ id, title, date = null, priority = 'P4', status = '
       Status: { status: { name: status } },
       Type: { select: type ? { name: type } : null },
       'Todoist ID': { rich_text: todoistId ? [{ plain_text: todoistId }] : [] },
+      Description: { rich_text: description ? [{ plain_text: description }] : [] },
+      Tags: { multi_select: tags.map((name) => ({ name })) },
     },
   };
 }

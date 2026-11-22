@@ -54,7 +54,7 @@ State is written once at the end of a run (also if a step throws), plus right af
 Normalized task shape (used for comparison):
 
 ```js
-{ title, taskDate, priority, status, type }
+{ title, taskDate, priority, status, type, description, tags }
 ```
 
 ### Title
@@ -112,6 +112,26 @@ Updates send Todoist only the fields that changed, so editing a title never re-s
 - Moving a task between Todoist projects updates Type (empty for projects other than the two above).
 - If the `Personal` or `Professional` project doesn't exist, tasks needing it are skipped and a warning is logged.
 
+### Description
+
+| Notion | Todoist |
+|---|---|
+| `Description` (Text) | `description` |
+| empty | empty |
+
+- Plain text only; formatting isn't carried over. Long text is split into Notion's 2,000-character segments.
+
+### Tags ↔ Labels
+
+| Notion | Todoist |
+|---|---|
+| `Tags` (Multi-select) option | label with the same name |
+| no options | no labels |
+
+- Matched by exact name. A tag or label that exists on only one side is created on the other when assigned.
+- Notion option names can't contain commas, so a Todoist label with a comma stays Todoist-only and is kept when the sync updates that task's labels.
+- Merged per tag (see Sync Rules).
+
 ### Link
 
 | Notion | Todoist |
@@ -122,7 +142,7 @@ Updates send Todoist only the fields that changed, so editing a title never re-s
 
 ### Updates (linked pairs): field-level merge
 
-Each field (`title`, `taskDate`, `priority`, `status`, `type`) is merged on its own against the last known snapshot:
+Each field (`title`, `taskDate`, `priority`, `status`, `type`, `description`) is merged on its own against the last known snapshot:
 
 | Field changed in Notion | Field changed in Todoist | Result |
 |---|---|---|
@@ -135,6 +155,7 @@ Each field (`title`, `taskDate`, `priority`, `status`, `type`) is merged on its 
 - Edit times: Notion page `last_edited_time` vs Todoist task `updated_at`. A tie or a missing time falls back to Todoist.
 - Notion rounds `last_edited_time` down to the minute, so a Notion edit and a Todoist edit in the same minute can resolve in Todoist's favour.
 - Example: title changed in Notion and priority changed in Todoist → both kept, and each side receives only the other's change.
+- **Tags merge per tag:** each side's additions and removals since the last run are applied, so adding `urgent` in Notion while removing `home` in Todoist keeps both changes. Tags never conflict.
 - After merging, Todoist calls are made only as needed: update (title/date/priority), move (Type), close/reopen (status).
 
 ### Deletions & completions
@@ -168,7 +189,9 @@ D1 table `sync_state`, row `id = 1`, column `data`:
         "taskDate": "2026-11-30",
         "priority": "P2",
         "status": "TO DO",
-        "type": "Personal"
+        "type": "Personal",
+        "description": "Bring the signed lease",
+        "tags": ["home", "urgent"]
       },
       "todoistCompletedAt": "2026-11-20T08:00:00Z"
     }
@@ -177,6 +200,8 @@ D1 table `sync_state`, row `id = 1`, column `data`:
 ```
 
 State from before Type sync has no `type`. On the first run the Notion value is kept and the Todoist task is moved to match.
+
+State from before Description/Tags sync has no `description` or `tags`. Those Notion properties start empty, so the baseline is Notion's value: existing Todoist descriptions and labels are copied into Notion rather than cleared. The relink step uses the same rule for these two fields.
 
 D1 table `sync_lock` (row `id = 1`, `locked_until` epoch ms) ensures only one run at a time. A run that crashes frees the lock after 5 minutes.
 
