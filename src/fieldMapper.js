@@ -21,18 +21,18 @@ const PRIORITY_TODOIST_TO_NOTION = {
 // Todoist: is_completed = true/false
 // Rule: DOING is Notion-only. Todoist complete=true → Done. complete=false → TO DO only if not DOING.
 
-function todoistStatusToNotion(isCompleted, currentNotionStatus) {
+export function todoistStatusToNotion(isCompleted, currentNotionStatus) {
   if (isCompleted) return 'Done';
   if (currentNotionStatus === 'DOING') return 'DOING';
   return 'TO DO';
 }
 
-function notionStatusToTodoist(notionStatus) {
+export function notionStatusToTodoist(notionStatus) {
   return notionStatus === 'Done';
 }
 
 // ─── Notion → Normalized ─────────────────────────────────────────────────────
-function fromNotion(page) {
+export function fromNotion(page) {
   const props = page.properties;
 
   const title = props['Tasks']?.title?.[0]?.plain_text?.trim() || '';
@@ -47,7 +47,7 @@ function fromNotion(page) {
 }
 
 // ─── Todoist → Normalized ────────────────────────────────────────────────────
-function fromTodoist(task) {
+export function fromTodoist(task) {
   const title = task.content || '';
   const taskDate = task.due?.date || null;
   const priority = PRIORITY_TODOIST_TO_NOTION[task.priority] || 'P4';
@@ -59,7 +59,7 @@ function fromTodoist(task) {
 }
 
 // ─── Normalized → Notion properties payload ──────────────────────────────────
-function toNotionProperties(normalized, currentNotionStatus = 'TO DO') {
+export function toNotionProperties(normalized, currentNotionStatus = 'TO DO') {
   const status =
     normalized.isCompleted !== undefined
       ? todoistStatusToNotion(normalized.isCompleted, currentNotionStatus)
@@ -87,7 +87,7 @@ function toNotionProperties(normalized, currentNotionStatus = 'TO DO') {
 }
 
 // ─── Normalized → Todoist task payload ───────────────────────────────────────
-function toTodoistPayload(normalized) {
+export function toTodoistPayload(normalized) {
   const payload = {
     content: normalized.title,
     priority: PRIORITY_NOTION_TO_TODOIST[normalized.priority] || 1,
@@ -102,7 +102,7 @@ function toTodoistPayload(normalized) {
 
 // ─── Snapshot for state comparison ───────────────────────────────────────────
 // Always uses status string (never isCompleted boolean) so both sides compare equally
-function toSnapshot(normalized) {
+export function toSnapshot(normalized) {
   return {
     title: normalized.title,
     taskDate: normalized.taskDate,
@@ -111,16 +111,6 @@ function toSnapshot(normalized) {
   };
 }
 
-function snapshotsAreEqual(a, b) {
+export function snapshotsAreEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
-
-module.exports = {
-  fromNotion,
-  fromTodoist,
-  toNotionProperties,
-  toTodoistPayload,
-  toSnapshot,
-  snapshotsAreEqual,
-  notionStatusToTodoist,
-};

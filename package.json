@@ -1,19 +1,22 @@
 {
   "name": "notion-todoist-sync",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "type": "module",
+  "description": "Bi-directional Notion ↔ Todoist sync running on Cloudflare Workers",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "test": "node --test",
+    "db:migrate": "wrangler d1 migrations apply notion-todoist-sync --remote"
   },
-  "keywords": [],
-  "author": "",
   "license": "ISC",
-  "dependencies": {
-    "@notionhq/client": "^2.2.15",
-    "axios": "^1.7.2",
-    "dotenv": "^16.4.5",
-    "node-cron": "^3.0.3"
+  "devDependencies": {
+    "wrangler": "^4.166.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261119.1": true
   }
 }

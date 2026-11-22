@@ -1,80 +1,69 @@
-const { Client } = require('@notionhq/client');
+import { requestJson } from './http.js';
 
-let notion;
-let DATABASE_ID;
+const BASE_URL = 'https://api.notion.com/v1';
+// Same API version the previous @notionhq/client v2 setup used.
+const NOTION_VERSION = '2022-06-28';
 
-function init() {
-  notion = new Client({ auth: process.env.NOTION_TOKEN });
-  DATABASE_ID = process.env.NOTION_DATABASE_ID;
-}
+export function createNotionClient({ token, databaseId, budget }) {
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Notion-Version': NOTION_VERSION,
+    'Content-Type': 'application/json',
+  };
 
-// Fetch all pages from the Notion task database
-async function getAllPages() {
-  const pages = [];
-  let cursor = undefined;
+  const call = (method, path, body) =>
+    requestJson(
+      budget,
+      `${BASE_URL}${path}`,
+      { method, headers, body: body ? JSON.stringify(body) : undefined },
+      'Notion',
+    );
 
-  do {
-    const response = await notion.databases.query({
-      database_id: DATABASE_ID,
-      start_cursor: cursor,
-      page_size: 100,
-    });
-    pages.push(...response.results);
-    cursor = response.has_more ? response.next_cursor : undefined;
-  } while (cursor);
-
-  return pages;
-}
-
-// Create a new page in the Notion database
-async function createPage(properties) {
-  const response = await notion.pages.create({
-    parent: { database_id: DATABASE_ID },
-    properties,
-  });
-  return response;
-}
-
-// Update an existing Notion page
-async function updatePage(pageId, properties) {
-  const response = await notion.pages.update({
-    page_id: pageId,
-    properties,
-  });
-  return response;
-}
-
-// Archive (soft-delete) a Notion page
-async function deletePage(pageId) {
-  await notion.pages.update({
-    page_id: pageId,
-    archived: true,
-  });
-}
-
-// Get Todoist ID stored in a Notion page property
-function getTodoistIdFromPage(page) {
-  return page.properties['Todoist ID']?.rich_text?.[0]?.plain_text || null;
-}
-
-// Store the Todoist task ID inside the Notion page
-async function setTodoistId(pageId, todoistId) {
-  await notion.pages.update({
-    page_id: pageId,
-    properties: {
-      'Todoist ID': {
-        rich_text: [{ text: { content: String(todoistId) } }],
-      },
+  return {
+    // Fetch all pages from the Notion task database
+    async getAllPages() {
+      const pages = [];
+      let cursor;
+      do {
+        const response = await call('POST', `/databases/${databaseId}/query`, {
+          page_size: 100,
+          ...(cursor ? { start_cursor: cursor } : {}),
+        });
+        pages.push(...response.results);
+        cursor = response.has_more ? response.next_cursor : undefined;
+      } while (cursor);
+      return pages;
     },
-  });
+
+    // Create a new page in the Notion database
+    createPage(properties) {
+      return call('POST', '/pages', {
+        parent: { database_id: databaseId },
+        properties,
+      });
+    },
+
+    // Update an existing Notion page
+    updatePage(pageId, properties) {
+      return call('PATCH', `/pages/${pageId}`, { properties });
+    },
+
+    // Archive (soft-delete) a Notion page
+    async deletePage(pageId) {
+      await call('PATCH', `/pages/${pageId}`, { archived: true });
+    },
+
+    // Store the Todoist task ID inside the Notion page
+    async setTodoistId(pageId, todoistId) {
+      await call('PATCH', `/pages/${pageId}`, {
+        properties: todoistIdProperty(todoistId),
+      });
+    },
+  };
 }
 
-module.exports = {
-  init,
-  getAllPages,
-  createPage,
-  updatePage,
-  deletePage,
-  getTodoistIdFromPage,
-  setTodoistId,
-};
+export function todoistIdProperty(todoistId) {
+  return {
+    'Todoist ID': { rich_text: [{ text: { content: String(todoistId) } }] },
+  };
+}

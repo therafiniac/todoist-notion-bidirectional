@@ -1,15 +1,8 @@
-const axios = require('axios');
+import { requestJson } from './http.js';
 
 const BASE_URL = 'https://api.todoist.com/api/v1';
 
-function getHeaders() {
-  return {
-    Authorization: `Bearer ${process.env.TODOIST_API_TOKEN}`,
-    'Content-Type': 'application/json',
-  };
-}
-
-// Normalize response — new API may return { results: [] } or plain array
+// Normalize response — API may return { results: [] } or plain array
 function extractArray(data) {
   if (Array.isArray(data)) return data;
   if (data && Array.isArray(data.results)) return data.results;
@@ -17,66 +10,49 @@ function extractArray(data) {
   return [];
 }
 
-// Fetch all active (non-completed) tasks
-async function getAllTasks() {
-  const response = await axios.get(`${BASE_URL}/tasks`, {
-    headers: getHeaders(),
-  });
-  return extractArray(response.data);
-}
+export function createTodoistClient({ token, budget }) {
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
 
-// Completed tasks not available on free plan via v1 API
-async function getRecentlyCompletedTasks() {
-  return [];
-}
+  const call = (method, path, body) =>
+    requestJson(
+      budget,
+      `${BASE_URL}${path}`,
+      { method, headers, body: body ? JSON.stringify(body) : undefined },
+      'Todoist',
+    );
 
-// Create a new Todoist task
-async function createTask(payload) {
-  const response = await axios.post(`${BASE_URL}/tasks`, payload, {
-    headers: getHeaders(),
-  });
-  return response.data;
-}
+  return {
+    // Fetch all active (non-completed) tasks
+    async getAllTasks() {
+      return extractArray(await call('GET', '/tasks'));
+    },
 
-// Update an existing Todoist task
-async function updateTask(taskId, payload) {
-  const response = await axios.post(`${BASE_URL}/tasks/${taskId}`, payload, {
-    headers: getHeaders(),
-  });
-  return response.data || {};
-}
+    // Completed tasks not available on free plan via v1 API
+    async getRecentlyCompletedTasks() {
+      return [];
+    },
 
-// Close (complete) a Todoist task
-async function closeTask(taskId) {
-  await axios.post(
-    `${BASE_URL}/tasks/${taskId}/close`,
-    {},
-    { headers: getHeaders() },
-  );
-}
+    createTask(payload) {
+      return call('POST', '/tasks', payload);
+    },
 
-// Reopen a completed Todoist task
-async function reopenTask(taskId) {
-  await axios.post(
-    `${BASE_URL}/tasks/${taskId}/reopen`,
-    {},
-    { headers: getHeaders() },
-  );
-}
+    async updateTask(taskId, payload) {
+      return (await call('POST', `/tasks/${taskId}`, payload)) || {};
+    },
 
-// Delete a Todoist task permanently
-async function deleteTask(taskId) {
-  await axios.delete(`${BASE_URL}/tasks/${taskId}`, {
-    headers: getHeaders(),
-  });
-}
+    async closeTask(taskId) {
+      await call('POST', `/tasks/${taskId}/close`, {});
+    },
 
-module.exports = {
-  getAllTasks,
-  getRecentlyCompletedTasks,
-  createTask,
-  updateTask,
-  closeTask,
-  reopenTask,
-  deleteTask,
-};
+    async reopenTask(taskId) {
+      await call('POST', `/tasks/${taskId}/reopen`, {});
+    },
+
+    async deleteTask(taskId) {
+      await call('DELETE', `/tasks/${taskId}`);
+    },
+  };
+}
