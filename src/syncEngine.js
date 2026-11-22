@@ -53,16 +53,20 @@ export async function runSync(ctx) {
   // Track IDs created this cycle to skip in deletion check
   const createdThisCycle = new Set();
 
-  // 2. CREATE: Todoist → Notion (new tasks not yet in state)
+  // 2. RELINK: pages whose stored Todoist ID matches an unlinked Todoist task
+  //    (fresh deploy without imported state, or lost state) — prevents duplicates
+  await relinkByTodoistId(ctx, notionPages, allTodoistMap);
+
+  // 3. CREATE: Todoist → Notion (new tasks not yet in state)
   await syncTodoistToNotion(ctx, todoistActiveTasks, createdThisCycle);
 
-  // 3. CREATE: Notion → Todoist (new pages not yet in state)
+  // 4. CREATE: Notion → Todoist (new pages not yet in state)
   await syncNotionToTodoist(ctx, notionPages, createdThisCycle);
 
-  // 4. UPDATE: tasks already linked in state, check for changes
+  // 5. UPDATE: tasks already linked in state, check for changes
   await handleUpdates(ctx, allTodoistMap, activeNotionMap);
 
-  // 5. DELETIONS & COMPLETIONS
+  // 6. DELETIONS & COMPLETIONS
   await handleDeletionsAndCompletions(
     ctx,
     activeNotionMap,
@@ -72,7 +76,7 @@ export async function runSync(ctx) {
     completedKnown,
   );
 
-  // 6. Save final state
+  // 7. Save final state
   state.lastSyncedAt = new Date().toISOString();
   await saveState(ctx.db, state);
 
@@ -121,6 +125,38 @@ function canAfford(ctx, cost) {
   return false;
 }
 
+// ─── Relink by stored Todoist ID ─────────────────────────────────────────────
+// Baseline is the Todoist snapshot, so where the two differ the Notion value
+// reads as a change and is pushed to Todoist (same rule as the Type backfill).
+async function relinkByTodoistId(ctx, notionPages, allTodoistMap) {
+  const { state } = ctx;
+  let linked = 0;
+  for (const page of notionPages) {
+    if (page.archived || findByNotionId(state, page.id)) continue;
+    const todoistId = fieldMapper.todoistIdFromPage(page);
+    const task = todoistId && allTodoistMap.get(todoistId);
+    if (!task) continue;
+    if (findByTodoistId(state, todoistId)) {
+      console.error(
+        `  ⚠️  Todoist ID ${todoistId} is already linked to another Notion page; "${fieldMapper.fromNotion(page).title}" not relinked`,
+      );
+      continue;
+    }
+
+    state.tasks[todoistId] = {
+      notionPageId: page.id,
+      lastKnownState: fieldMapper.toSnapshot(
+        fieldMapper.fromTodoist(task, ctx.projects.names),
+      ),
+    };
+    linked += 1;
+  }
+  if (linked > 0) {
+    await saveState(ctx.db, state);
+    console.log(`  🔗 Relinked ${linked} existing pair(s) by Todoist ID`);
+  }
+}
+
 // ─── Todoist → Notion (CREATE only) ──────────────────────────────────────────
 async function syncTodoistToNotion(ctx, todoistTasks, createdThisCycle) {
   const { state } = ctx;
@@ -160,6 +196,9 @@ async function syncNotionToTodoist(ctx, notionPages, createdThisCycle) {
     if (page.archived) continue;
     const pageId = page.id;
     if (findByNotionId(state, pageId)) continue;
+    // Has a Todoist ID but wasn't relinked: its task is gone (deleted, or
+    // completed long ago) or already linked elsewhere. Don't recreate it.
+    if (fieldMapper.todoistIdFromPage(page)) continue;
     if (!canAfford(ctx, COST.createInTodoist)) continue;
 
     const normalized = fieldMapper.fromNotion(page);

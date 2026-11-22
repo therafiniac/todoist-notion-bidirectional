@@ -74,6 +74,13 @@ export function fromNotion(page) {
   return { title, taskDate, priority, status, type };
 }
 
+// The Todoist task ID the sync stored on a Notion page, if any
+export function todoistIdFromPage(page) {
+  const segments = page.properties?.['Todoist ID']?.rich_text || [];
+  const id = segments.map((segment) => segment.plain_text || '').join('').trim();
+  return id || null;
+}
+
 // ─── Todoist → Normalized ────────────────────────────────────────────────────
 // projectNames: Map of Todoist project ID → project name
 export function fromTodoist(task, projectNames = new Map()) {
