@@ -7,10 +7,11 @@ Keeps a Notion task database and Todoist in sync in both directions. Runs on **C
 
 ## Features
 
-- **Two-way sync** of title, date, priority, status and Type.
+- **Two-way sync** of title, date, priority, status, Type, description and tags.
   - **Status:** `TO DO` / `DOING` / `Done` ↔ open / completed. `DOING` is Notion-only and is preserved.
   - **Priority:** `P1`–`P4` ↔ Todoist `4`–`1`.
   - **Dates:** synced as calendar days; times are kept unless the day changes.
+  - **Description ↔ description** (plain text) and **Tags ↔ labels** (same names; merged per tag).
   - **Type ↔ Project:** `Personal` / `Professional` ↔ the Todoist project with the same name. Other projects sync with an empty Type; an empty Type goes to the Inbox.
 - **Conflict resolution:** field-level merge. Edits to different fields are both kept; if the same field changed on both sides, the later edit wins (tie → Todoist).
 - **Deletions both ways:** deleting a Notion page deletes the Todoist task; deleting a Todoist task archives the Notion page. Completing in Todoist marks the page `Done`.
@@ -26,6 +27,8 @@ Keeps a Notion task database and Todoist in sync in both directions. Runs on **C
 | `Priority` | Select | `P1`, `P2`, `P3`, `P4` |
 | `Status` | Status | `TO DO`, `DOING`, `Done` |
 | `Type` | Select | `Personal`, `Professional` |
+| `Description` | Text | Task description |
+| `Tags` | Multi-select | Todoist labels (same names) |
 | `Todoist ID` | Text | Filled in by the sync |
 
 Todoist needs projects named exactly `Personal` and `Professional`.

@@ -30,6 +30,8 @@ A step-by-step guide to running the sync on Cloudflare's free plan. Plan on abou
    | `Priority` | Select | `P1`, `P2`, `P3`, `P4` |
    | `Status` | Status | `TO DO`, `DOING`, `Done` |
    | `Type` | Select | `Personal`, `Professional` |
+   | `Description` | Text | |
+   | `Tags` | Multi-select | any; matched to Todoist labels by name |
    | `Todoist ID` | Text | leave empty; the sync fills it |
 
 ## 2. Prepare Todoist

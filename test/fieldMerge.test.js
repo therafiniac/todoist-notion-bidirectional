@@ -4,7 +4,7 @@ import { mergeSnapshots } from '../src/fieldMapper.js';
 import { runSync } from '../src/syncEngine.js';
 import { createFakeDb, createFakes, notionPage } from './helpers.js';
 
-const old = { title: 'Task', taskDate: null, priority: 'P4', status: 'TO DO', type: 'Personal' };
+const old = { title: 'Task', taskDate: null, priority: 'P4', status: 'TO DO', type: 'Personal', description: '', tags: [] };
 
 test('different fields changed on each side are both kept', () => {
   const { merged, conflicts } = mergeSnapshots({

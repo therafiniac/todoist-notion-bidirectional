@@ -4,7 +4,7 @@ import { toTodoistUpdatePayload } from '../src/fieldMapper.js';
 import { runSync } from '../src/syncEngine.js';
 import { createFakeDb, createFakes, notionPage } from './helpers.js';
 
-const base = { title: 'Task', taskDate: '2026-11-30', priority: 'P4', status: 'TO DO', type: null };
+const base = { title: 'Task', taskDate: '2026-11-30', priority: 'P4', status: 'TO DO', type: null, description: '', tags: [] };
 
 test('clearing the date sends due_string "no date"', () => {
   assert.deepEqual(toTodoistUpdatePayload({ ...base, taskDate: null }, base), { due_string: 'no date' });
