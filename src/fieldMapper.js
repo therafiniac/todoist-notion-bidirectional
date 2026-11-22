@@ -47,6 +47,12 @@ export function isTodoistTaskCompleted(task) {
   return task.checked === true || task.is_completed === true || Boolean(task.completed_at);
 }
 
+// Dates sync as calendar days (YYYY-MM-DD). Times can't round-trip between the
+// two APIs' formats, so comparing full datetimes would report a change every run.
+export function toDateOnly(value) {
+  return value ? String(value).slice(0, 10) : null;
+}
+
 // ─── Notion → Normalized ─────────────────────────────────────────────────────
 export function fromNotion(page) {
   const props = page.properties;
@@ -57,7 +63,7 @@ export function fromNotion(page) {
     .join('')
     .trim();
 
-  const taskDate = props['Task Date']?.date?.start || null;
+  const taskDate = toDateOnly(props['Task Date']?.date?.start);
 
   const priority = props['Priority']?.select?.name || 'P4';
 
@@ -72,7 +78,7 @@ export function fromNotion(page) {
 // projectNames: Map of Todoist project ID → project name
 export function fromTodoist(task, projectNames = new Map()) {
   const title = task.content || '';
-  const taskDate = task.due?.date || null;
+  const taskDate = toDateOnly(task.due?.date);
   const priority = PRIORITY_TODOIST_TO_NOTION[task.priority] || 'P4';
   const isCompleted = isTodoistTaskCompleted(task);
   // Normalize to a status string so snapshots are always comparable

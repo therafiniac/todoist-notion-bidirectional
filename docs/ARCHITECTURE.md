@@ -69,6 +69,8 @@ Normalized task shape (used for comparison):
 | `Task Date` → `date.start` | `due.date` (read) / `due_date` (write) |
 | empty | no due date (cleared with `due_string: "no date"`) |
 
+Dates sync as calendar days (`YYYY-MM-DD`): a time on either side is ignored when comparing, and kept unless the date itself changes. When the date changes, the other side receives the day without a time. Todoist tasks with a fixed timezone report their date in UTC, so their day can differ by one near midnight.
+
 Updates send Todoist only the fields that changed, so editing a title never re-sends the due date and a recurring due date is kept.
 
 ### Priority
