@@ -207,7 +207,7 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
     if (!('type' in oldSnapshot)) oldSnapshot.type = todoistNormalized.type;
 
     const todoistChanged = !fieldMapper.snapshotsAreEqual(
-      oldSnapshot,
+      fieldMapper.asTodoistSees(oldSnapshot),
       todoistSnapshot,
     );
     const notionChanged = !fieldMapper.snapshotsAreEqual(
@@ -225,7 +225,11 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
           oldSnapshot.status,
         );
         await ctx.notion.updatePage(entry.notionPageId, properties);
-        entry.lastKnownState = todoistSnapshot;
+        // Record the status Notion actually has now (DOING is kept if Todoist is active)
+        entry.lastKnownState = {
+          ...todoistSnapshot,
+          status: properties.Status.status.name,
+        };
         await saveState(ctx.db, state);
         console.log(`  ${label}: "${todoistNormalized.title}"`);
       } catch (err) {
@@ -235,6 +239,18 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
         );
       }
     } else if (notionChanged) {
+      // Only TO DO ↔ DOING changed: nothing Todoist can show, just record it
+      if (
+        fieldMapper.snapshotsAreEqual(
+          fieldMapper.asTodoistSees(oldSnapshot),
+          fieldMapper.asTodoistSees(notionSnapshot),
+        )
+      ) {
+        entry.lastKnownState = notionSnapshot;
+        await saveState(ctx.db, state);
+        continue;
+      }
+
       // Notion changed → push to Todoist
       if (!canAfford(ctx, COST.updateTodoist)) continue;
       try {
