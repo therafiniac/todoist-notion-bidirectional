@@ -42,7 +42,7 @@
 1. **Fetch** (4 requests minimum): Notion database pages, Todoist active tasks, Todoist tasks completed in the last 30 days, Todoist projects.
 2. **Todoist → Notion create:** each Todoist task not in state becomes a Notion page (with `Todoist ID` set).
 3. **Notion → Todoist create:** each Notion page not in state becomes a Todoist task in the project for its Type.
-4. **Update:** for each linked pair, compare both sides to the last known snapshot and push the side that changed.
+4. **Update:** for each linked pair, merge both sides field by field against the last known snapshot, then push to each side only what differs.
 5. **Deletions & completions:** handle tasks missing on either side.
 6. **Save state** and record `lastSyncedAt`.
 
@@ -115,14 +115,22 @@ Normalized task shape (used for comparison):
 
 ## Sync Rules
 
-### Updates (linked pairs)
+### Updates (linked pairs): field-level merge
 
-| Notion changed | Todoist changed | Action |
+Each field (`title`, `taskDate`, `priority`, `status`, `type`) is merged on its own against the last known snapshot:
+
+| Field changed in Notion | Field changed in Todoist | Result |
 |---|---|---|
-| no | no | nothing |
-| yes | no | push Notion → Todoist (update, move project, close/reopen) |
-| no | yes | push Todoist → Notion |
-| yes | yes | conflict: Todoist wins, pushed to Notion |
+| no | no | unchanged |
+| yes | no | Notion value |
+| no | yes | Todoist value |
+| yes, same value | yes, same value | that value (no conflict) |
+| yes | yes, different value | **conflict: later edit wins** |
+
+- Edit times: Notion page `last_edited_time` vs Todoist task `updated_at`. A tie or a missing time falls back to Todoist.
+- Notion rounds `last_edited_time` down to the minute, so a Notion edit and a Todoist edit in the same minute can resolve in Todoist's favour.
+- Example: title changed in Notion and priority changed in Todoist → both kept, and each side receives only the other's change.
+- After merging, Todoist calls are made only as needed: update (title/date/priority), move (Type), close/reopen (status).
 
 ### Deletions & completions
 
@@ -184,6 +192,7 @@ Worst-case requests per operation (an operation starts only if the budget covers
 | Create in Todoist | 3 (create, close if Done, write Todoist ID) |
 | Update Notion | 1 |
 | Update Todoist | 3 (update, move project, close/reopen) |
+| Update both (merge) | 4 |
 | Delete/archive | 1 |
 
 ## Future: Webhooks

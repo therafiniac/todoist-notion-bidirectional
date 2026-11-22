@@ -11,7 +11,7 @@ A state-managed synchronization engine that keeps tasks in sync between a Notion
   - **Priority:** Maps Notion select labels (`P1`–`P4`) to Todoist priority levels (`4`–`1`).
   - **Dates:** Syncs task due dates between both platforms.
   - **Type ↔ Project:** Notion `Type` (`Personal` / `Professional`) maps to the Todoist project of the same name. Tasks in other Todoist projects sync with an empty Type; Notion pages with an empty Type go to the Todoist Inbox.
-- **Conflict Resolution:** When both sides change between runs, Todoist is the source of truth.
+- **Conflict Resolution:** Field-level merge. Changes to different fields on each side are both kept; if the same field changed on both sides, the later edit wins (tie → Todoist).
 - **Deletion Handling:**
   - Deleting a Notion page → deletes the corresponding Todoist task (active or completed).
   - Deleting a Todoist task → archives the corresponding Notion page, including recently completed tasks.
@@ -51,7 +51,7 @@ Each run (every minute) follows five steps:
 1. **Fetch** — Pull all tasks from both Notion and Todoist.
 2. **Todoist → Notion CREATE** — For any Todoist task not yet in state, create a new Notion page.
 3. **Notion → Todoist CREATE** — For any Notion page not yet in state, create a new Todoist task.
-4. **UPDATE** — Compare current snapshots against last known state. Push changes to whichever side changed. If both changed, Todoist wins.
+4. **UPDATE** — Merge both sides field by field against the last known state and push only the differences. Same field changed on both sides → later edit wins.
 5. **DELETIONS & COMPLETIONS** — Handle task deletions and completions on either side.
 
 State is saved to D1 immediately after every create, so a failure mid-run cannot cause duplicate creation.

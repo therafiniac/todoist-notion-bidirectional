@@ -147,3 +147,46 @@ const SNAPSHOT_FIELDS = ['title', 'taskDate', 'priority', 'status', 'type'];
 export function snapshotsAreEqual(a, b) {
   return SNAPSHOT_FIELDS.every((field) => (a?.[field] ?? null) === (b?.[field] ?? null));
 }
+
+// ─── Field-level merge ───────────────────────────────────────────────────────
+// Merges both sides against the last known snapshot, one field at a time:
+// - a field changed on one side only → that side's value
+// - a field changed on both sides to different values → the later edit wins
+//   (Notion last_edited_time vs Todoist updated_at; a tie or missing time → Todoist)
+// Todoist's side is compared through asTodoistSees, since it can't show DOING.
+export function mergeSnapshots({ old, notion, todoist, notionEditedAt, todoistEditedAt }) {
+  const oldForTodoist = asTodoistSees(old);
+  const notionForTodoist = asTodoistSees(notion);
+  const todoistIsLater =
+    !notionEditedAt ||
+    !todoistEditedAt ||
+    new Date(todoistEditedAt).getTime() >= new Date(notionEditedAt).getTime();
+
+  const merged = {};
+  const conflicts = [];
+
+  for (const field of SNAPSHOT_FIELDS) {
+    const notionValue = notion[field] ?? null;
+    const todoistValue = todoist[field] ?? null;
+    const notionChanged = (old?.[field] ?? null) !== notionValue;
+    const todoistChanged = (oldForTodoist?.[field] ?? null) !== todoistValue;
+    const sameResult = (notionForTodoist[field] ?? null) === todoistValue;
+
+    let takeTodoist;
+    if (notionChanged && todoistChanged && !sameResult) {
+      conflicts.push(field);
+      takeTodoist = todoistIsLater;
+    } else {
+      takeTodoist = todoistChanged && !notionChanged;
+    }
+
+    merged[field] = takeTodoist ? todoistValue : notionValue;
+  }
+
+  // Todoist "TO DO" means "not completed"; keep Notion's DOING in that case.
+  if (merged.status === 'TO DO' && notion.status === 'DOING') {
+    merged.status = 'DOING';
+  }
+
+  return { merged, conflicts };
+}
