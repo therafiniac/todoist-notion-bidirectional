@@ -7,7 +7,7 @@ import { saveState, findByNotionId, findByTodoistId } from './stateManager.js';
 // budget can cover it; otherwise it is deferred to the next run.
 const COST = {
   createInNotion: 1,
-  createInTodoist: 3, // create + close (if Done) + write Todoist ID to Notion
+  createInTodoist: 2, // create + write Todoist ID to Notion
   updateNotion: 1,
   updateTodoist: 3, // update + move project (Type) + close/reopen
   delete: 1,
@@ -199,12 +199,15 @@ async function syncNotionToTodoist(ctx, notionPages, createdThisCycle) {
     // Has a Todoist ID but wasn't relinked: its task is gone (deleted, or
     // completed long ago) or already linked elsewhere. Don't recreate it.
     if (fieldMapper.todoistIdFromPage(page)) continue;
-    if (!canAfford(ctx, COST.createInTodoist)) continue;
 
     const normalized = fieldMapper.fromNotion(page);
+    // Already-finished pages aren't sent to Todoist; if one is reopened in
+    // Notion later, it is created then.
+    if (normalized.status === 'Done') continue;
     // Empty Type → no project_id → Todoist puts the task in the Inbox
     const projectId = normalized.type ? ctx.projects.idByType[normalized.type] : null;
     if (projectId === undefined) continue;
+    if (!canAfford(ctx, COST.createInTodoist)) continue;
     try {
       const payload = {
         ...fieldMapper.toTodoistPayload(normalized),
@@ -221,9 +224,6 @@ async function syncNotionToTodoist(ctx, notionPages, createdThisCycle) {
       await saveState(ctx.db, state);
       createdThisCycle.add(taskId);
 
-      if (normalized.status === 'Done') {
-        await ctx.todoist.closeTask(taskId);
-      }
       await ctx.notion.setTodoistId(pageId, taskId);
       console.log(`  ➕ Notion→Todoist CREATE: "${normalized.title}"`);
     } catch (err) {
