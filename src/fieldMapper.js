@@ -51,7 +51,11 @@ export function isTodoistTaskCompleted(task) {
 export function fromNotion(page) {
   const props = page.properties;
 
-  const title = props['Tasks']?.title?.[0]?.plain_text?.trim() || '';
+  // A title is split into segments at formatting, links and mentions; join them all
+  const title = (props['Tasks']?.title || [])
+    .map((segment) => segment.plain_text || '')
+    .join('')
+    .trim();
 
   const taskDate = props['Task Date']?.date?.start || null;
 
