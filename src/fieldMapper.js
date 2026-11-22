@@ -135,6 +135,13 @@ export function toSnapshot(normalized) {
   };
 }
 
+// What Todoist can represent of a snapshot: DOING is Notion-only and reads as
+// TO DO in Todoist. Compare Todoist's side against this, otherwise a DOING task
+// looks changed on every run.
+export function asTodoistSees(snapshot) {
+  return snapshot?.status === 'DOING' ? { ...snapshot, status: 'TO DO' } : snapshot;
+}
+
 const SNAPSHOT_FIELDS = ['title', 'taskDate', 'priority', 'status', 'type'];
 
 export function snapshotsAreEqual(a, b) {
