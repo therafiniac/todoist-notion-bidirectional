@@ -150,3 +150,4 @@ Note: local runs call the real Notion and Todoist APIs.
 - Todoist API endpoint: `/api/v1`.
 - Notion `Status` is a native `status` type, not a `select`.
 - `DOING` status only exists in Notion; Todoist tasks are always either active or completed.
+- Todoist API v1 marks completion with `checked`. Completed tasks come from `GET /tasks/completed/by_completion_date` (last 30 days); if that call fails, the run skips inferring Todoist deletions so a completion is never mistaken for a deletion.

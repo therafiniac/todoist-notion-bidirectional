@@ -18,7 +18,7 @@ const PRIORITY_TODOIST_TO_NOTION = {
 
 // ─── Status Mapping ──────────────────────────────────────────────────────────
 // Notion: "TO DO", "DOING", "Done"
-// Todoist: is_completed = true/false
+// Todoist: checked = true/false
 // Rule: DOING is Notion-only. Todoist complete=true → Done. complete=false → TO DO only if not DOING.
 
 export function todoistStatusToNotion(isCompleted, currentNotionStatus) {
@@ -29,6 +29,11 @@ export function todoistStatusToNotion(isCompleted, currentNotionStatus) {
 
 export function notionStatusToTodoist(notionStatus) {
   return notionStatus === 'Done';
+}
+
+// API v1 marks completion with `checked`; `completed_at` is set for completed tasks.
+export function isTodoistTaskCompleted(task) {
+  return task.checked === true || task.is_completed === true || Boolean(task.completed_at);
 }
 
 // ─── Notion → Normalized ─────────────────────────────────────────────────────
@@ -51,7 +56,7 @@ export function fromTodoist(task) {
   const title = task.content || '';
   const taskDate = task.due?.date || null;
   const priority = PRIORITY_TODOIST_TO_NOTION[task.priority] || 'P4';
-  const isCompleted = task.is_completed || false;
+  const isCompleted = isTodoistTaskCompleted(task);
   // Normalize to a status string so snapshots are always comparable
   const status = isCompleted ? 'Done' : 'TO DO';
 

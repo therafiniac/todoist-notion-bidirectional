@@ -97,3 +97,53 @@ test('lock prevents overlapping runs and is released', async () => {
   await releaseLock(db);
   assert.equal(await acquireLock(db, 3000), true);
 });
+
+function linkedState(status = 'TO DO') {
+  return {
+    lastSyncedAt: null,
+    tasks: {
+      7: {
+        notionPageId: 'p7',
+        lastKnownState: { title: 'Pay rent', taskDate: null, priority: 'P4', status },
+      },
+    },
+  };
+}
+
+test('Todoist completion marks the Notion page Done instead of archiving it', async () => {
+  const fakes = createFakes({
+    notionPages: [notionPage({ id: 'p7', title: 'Pay rent' })],
+    todoistTasks: [],
+    completedTasks: [{ id: '7', content: 'Pay rent', priority: 1, checked: true, completed_at: '2026-11-22T09:00:00Z' }],
+  });
+
+  const state = await sync(fakes, createFakeDb(), linkedState());
+
+  const update = fakes.calls.find((c) => c.name === 'notion.updatePage');
+  assert.equal(update.args[1].Status.status.name, 'Done');
+  assert.ok(!fakes.names().includes('notion.deletePage'));
+  assert.equal(state.tasks['7'].lastKnownState.status, 'Done');
+});
+
+test('Todoist deletion (absent from active and completed) archives the Notion page', async () => {
+  const fakes = createFakes({
+    notionPages: [notionPage({ id: 'p7', title: 'Pay rent' })],
+  });
+
+  const state = await sync(fakes, createFakeDb(), linkedState());
+
+  assert.ok(fakes.names().includes('notion.deletePage'));
+  assert.equal(state.tasks['7'], undefined);
+});
+
+test('does not archive when the completed list is unavailable', async () => {
+  const fakes = createFakes({
+    notionPages: [notionPage({ id: 'p7', title: 'Pay rent' })],
+    completedTasks: null,
+  });
+
+  const state = await sync(fakes, createFakeDb(), linkedState());
+
+  assert.ok(!fakes.names().includes('notion.deletePage'));
+  assert.ok(state.tasks['7']);
+});
