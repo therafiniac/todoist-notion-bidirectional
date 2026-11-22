@@ -156,3 +156,14 @@ test('unlinked Notion pages already Done are not created in Todoist', async () =
   assert.ok(!fakes.names().includes('todoist.createTask'));
   assert.deepEqual(state.tasks, {});
 });
+
+test('a large first run stays within D1 Free query limit (50 per run)', async () => {
+  const db = createFakeDb();
+  const todoistTasks = Array.from({ length: 60 }, (_, i) => ({ id: String(i + 1), content: `T${i}`, priority: 1 }));
+  const fakes = createFakes({ todoistTasks });
+
+  const state = await sync(fakes, db);
+
+  assert.equal(Object.keys(state.tasks).length, 25);
+  assert.ok(db.queries <= 30, `used ${db.queries} D1 queries`);
+});

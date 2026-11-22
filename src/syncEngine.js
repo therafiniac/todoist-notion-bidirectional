@@ -3,6 +3,11 @@ import { todoistIdProperty } from './notionClient.js';
 import { COMPLETED_WINDOW_DAYS } from './todoistClient.js';
 import { saveState, findByNotionId, findByTodoistId } from './stateManager.js';
 
+// D1 Free allows 50 queries per invocation. State is written once at the end
+// of a run, plus once per create (so a crash can't cause a duplicate create).
+// Capping creates keeps a run at ~30 queries: lock, load, creates, save, unlock.
+const MAX_CREATES_PER_RUN = 25;
+
 // Worst-case subrequests each operation needs. An operation only starts if the
 // budget can cover it; otherwise it is deferred to the next run.
 const COST = {
@@ -20,6 +25,7 @@ export async function runSync(ctx) {
 
   const { state } = ctx;
   ctx.deferred = 0;
+  ctx.creates = 0;
 
   // 1. Fetch current data from both sides
   const [notionPages, todoistActiveTasks, todoistCompletedTasks, projects] =
@@ -53,35 +59,41 @@ export async function runSync(ctx) {
   // Track IDs created this cycle to skip in deletion check
   const createdThisCycle = new Set();
 
-  // 2. RELINK: pages whose stored Todoist ID matches an unlinked Todoist task
-  //    (fresh deploy without imported state, or lost state) — prevents duplicates
-  await relinkByTodoistId(ctx, notionPages, allTodoistMap);
+  // State changes are written once, at the end (or if a step throws), to stay
+  // within D1's per-invocation query limit.
+  let completed = false;
+  try {
+    // 2. RELINK: pages whose stored Todoist ID matches an unlinked Todoist task
+    //    (fresh deploy without imported state, or lost state) — prevents duplicates
+    await relinkByTodoistId(ctx, notionPages, allTodoistMap);
 
-  // 3. CREATE: Todoist → Notion (new tasks not yet in state)
-  await syncTodoistToNotion(ctx, todoistActiveTasks, createdThisCycle);
+    // 3. CREATE: Todoist → Notion (new tasks not yet in state)
+    await syncTodoistToNotion(ctx, todoistActiveTasks, createdThisCycle);
 
-  // 4. CREATE: Notion → Todoist (new pages not yet in state)
-  await syncNotionToTodoist(ctx, notionPages, createdThisCycle);
+    // 4. CREATE: Notion → Todoist (new pages not yet in state)
+    await syncNotionToTodoist(ctx, notionPages, createdThisCycle);
 
-  // 5. UPDATE: tasks already linked in state, check for changes
-  await handleUpdates(ctx, allTodoistMap, activeNotionMap);
+    // 5. UPDATE: tasks already linked in state, check for changes
+    await handleUpdates(ctx, allTodoistMap, activeNotionMap);
 
-  // 6. DELETIONS & COMPLETIONS
-  await handleDeletionsAndCompletions(
-    ctx,
-    activeNotionMap,
-    activeTodoistMap,
-    allTodoistMap,
-    createdThisCycle,
-    completedKnown,
-  );
-
-  // 7. Save final state
-  state.lastSyncedAt = new Date().toISOString();
-  await saveState(ctx.db, state);
+    // 6. DELETIONS & COMPLETIONS
+    await handleDeletionsAndCompletions(
+      ctx,
+      activeNotionMap,
+      activeTodoistMap,
+      allTodoistMap,
+      createdThisCycle,
+      completedKnown,
+    );
+    completed = true;
+  } finally {
+    // 7. Save final state
+    if (completed) state.lastSyncedAt = new Date().toISOString();
+    await saveState(ctx.db, state);
+  }
 
   const deferredNote = ctx.deferred
-    ? ` (${ctx.deferred} operation(s) deferred to next run: subrequest budget)`
+    ? ` (${ctx.deferred} operation(s) deferred to next run: per-run limits)`
     : '';
   console.log(
     `[${new Date().toISOString()}] ✅ Sync cycle complete. Subrequests used: ${ctx.budget.used}${deferredNote}`,
@@ -119,6 +131,12 @@ function completionStillInWindow(completedAt, now = Date.now()) {
   return age < (COMPLETED_WINDOW_DAYS - 1) * DAY_MS;
 }
 
+function canCreate(ctx) {
+  if (ctx.creates < MAX_CREATES_PER_RUN) return true;
+  ctx.deferred += 1;
+  return false;
+}
+
 function canAfford(ctx, cost) {
   if (ctx.budget.has(cost)) return true;
   ctx.deferred += 1;
@@ -152,7 +170,6 @@ async function relinkByTodoistId(ctx, notionPages, allTodoistMap) {
     linked += 1;
   }
   if (linked > 0) {
-    await saveState(ctx.db, state);
     console.log(`  🔗 Relinked ${linked} existing pair(s) by Todoist ID`);
   }
 }
@@ -163,7 +180,7 @@ async function syncTodoistToNotion(ctx, todoistTasks, createdThisCycle) {
   for (const task of todoistTasks) {
     const taskId = String(task.id);
     if (findByTodoistId(state, taskId)) continue;
-    if (!canAfford(ctx, COST.createInNotion)) continue;
+    if (!canCreate(ctx) || !canAfford(ctx, COST.createInNotion)) continue;
 
     const normalized = fieldMapper.fromTodoist(task, ctx.projects.names);
     try {
@@ -172,6 +189,7 @@ async function syncTodoistToNotion(ctx, todoistTasks, createdThisCycle) {
         ...todoistIdProperty(taskId),
       };
       const page = await ctx.notion.createPage(properties);
+      ctx.creates += 1;
 
       state.tasks[taskId] = {
         notionPageId: page.id,
@@ -207,13 +225,14 @@ async function syncNotionToTodoist(ctx, notionPages, createdThisCycle) {
     // Empty Type → no project_id → Todoist puts the task in the Inbox
     const projectId = normalized.type ? ctx.projects.idByType[normalized.type] : null;
     if (projectId === undefined) continue;
-    if (!canAfford(ctx, COST.createInTodoist)) continue;
+    if (!canCreate(ctx) || !canAfford(ctx, COST.createInTodoist)) continue;
     try {
       const payload = {
         ...fieldMapper.toTodoistPayload(normalized),
         ...(projectId ? { project_id: projectId } : {}),
       };
       const task = await ctx.todoist.createTask(payload);
+      ctx.creates += 1;
       const taskId = String(task.id);
 
       // Record the link immediately so a later failure can't cause a duplicate create.
@@ -273,7 +292,6 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
       // e.g. only TO DO ↔ DOING changed in Notion: nothing to push, just record it
       if (!fieldMapper.snapshotsAreEqual(merged, oldSnapshot)) {
         entry.lastKnownState = merged;
-        await saveState(ctx.db, state);
       }
       continue;
     }
@@ -303,7 +321,6 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
         );
       }
       entry.lastKnownState = merged;
-      await saveState(ctx.db, state);
 
       const direction = [
         notionNeedsUpdate && 'Notion',
@@ -359,10 +376,8 @@ async function handleDeletionsAndCompletions(
       : null;
     if (isCompletedInTodoist && entry.todoistCompletedAt !== completedAt) {
       entry.todoistCompletedAt = completedAt;
-      await saveState(ctx.db, state);
     } else if (isActiveInTodoist && entry.todoistCompletedAt) {
       delete entry.todoistCompletedAt;
-      await saveState(ctx.db, state);
     }
 
     // ── Todoist task was COMPLETED (not deleted) → update Notion to DONE ──
@@ -374,7 +389,6 @@ async function handleDeletionsAndCompletions(
           Status: { status: { name: 'Done' } },
         });
         entry.lastKnownState = { ...entry.lastKnownState, status: 'Done' };
-        await saveState(ctx.db, state);
         console.log(
           `  ✅ Todoist completed → Notion DONE: "${entry.lastKnownState.title}"`,
         );
@@ -390,7 +404,6 @@ async function handleDeletionsAndCompletions(
       try {
         await ctx.todoist.deleteTask(todoistId);
         delete state.tasks[todoistId];
-        await saveState(ctx.db, state);
         console.log(`  🗑️  Notion deleted → Todoist task removed`);
       } catch (err) {
         console.error(
@@ -415,7 +428,6 @@ async function handleDeletionsAndCompletions(
       try {
         await ctx.notion.deletePage(entry.notionPageId);
         delete state.tasks[todoistId];
-        await saveState(ctx.db, state);
         console.log(`  🗑️  Todoist deleted → Notion page archived`);
       } catch (err) {
         console.error(`  ❌ Failed to archive Notion page:`, err.message);
@@ -426,7 +438,6 @@ async function handleDeletionsAndCompletions(
     // ── Both gone → clean up state ──
     if (goneFromTodoist && !notionExists) {
       delete state.tasks[todoistId];
-      await saveState(ctx.db, state);
     }
   }
 }

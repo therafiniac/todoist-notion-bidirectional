@@ -47,7 +47,7 @@
 6. **Deletions & completions:** handle tasks missing on either side.
 7. **Save state** and record `lastSyncedAt`.
 
-State is also saved right after each create, so a failure later in the run cannot cause a duplicate.
+State is written once at the end of a run (also if a step throws), plus right after each create so a failure cannot cause a duplicate. At most 25 creates run per run; the rest continue in the next run. Updates and deletions are safe to repeat: if a run dies before saving, the next run's merge finds both sides already equal.
 
 ## Field Mapping
 
@@ -187,7 +187,10 @@ D1 table `sync_lock` (row `id = 1`, `locked_until` epoch ms) ensures only one ru
 | Subrequests per run | 50 | `budget.js` caps at 45 |
 | CPU time per run | 10 ms | Network waits don't count; the run is mostly I/O |
 | Requests per day | 100,000 | 1,440 cron runs/day |
-| D1 writes per day | 100,000 | ~1 per run + 1 per change |
+| D1 queries per run | 50 | ≤ ~30: lock, load, ≤ 25 creates, save, unlock |
+| D1 rows written per day | 100,000 | ~3 per run (lock, save, unlock) + 1 per create ≈ 4,500/day |
+| D1 rows read per day | 5 million | ~2 per run |
+| D1 storage | 500 MB per database | a few KB |
 
 A request rate-limited with `429` is retried once after its `Retry-After` delay (capped at 5 s), only if the budget still allows it. If it fails again, that operation waits for the next run.
 
