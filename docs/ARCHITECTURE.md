@@ -188,6 +188,8 @@ D1 table `sync_lock` (row `id = 1`, `locked_until` epoch ms) ensures only one ru
 | Requests per day | 100,000 | 1,440 cron runs/day |
 | D1 writes per day | 100,000 | ~1 per run + 1 per change |
 
+A request rate-limited with `429` is retried once after its `Retry-After` delay (capped at 5 s), only if the budget still allows it. If it fails again, that operation waits for the next run.
+
 Worst-case requests per operation (an operation starts only if the budget covers it; otherwise it waits for the next run):
 
 | Operation | Requests |
