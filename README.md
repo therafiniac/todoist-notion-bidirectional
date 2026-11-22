@@ -1,125 +1,103 @@
 # Notion ↔ Todoist Bi-Directional Sync
 
-A robust, state-managed synchronization engine for keeping tasks in sync between Notion databases and Todoist projects. Runs silently in the background on Windows, polling every 30 seconds.
+Keeps a Notion task database and Todoist in sync in both directions. Runs on **Cloudflare Workers (free plan)** once a minute, with sync state stored in **Cloudflare D1**.
 
-## Core Features
+- **Deploy it:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), a step-by-step guide.
+- **How it works:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), with the sync rules and every field mapping value.
 
-- **Bi-Directional Sync:** Changes in Notion flow to Todoist, and changes in Todoist flow back to Notion.
-- **State Tracking:** Uses a local `sync-state.json` to monitor changes on both platforms, preventing infinite loops and unnecessary API calls.
-- **Smart Field Mapping:**
-  - **Status:** Maps Notion's native `status` property (`TO DO`, `DOING`, `Done`) to Todoist's completion state. `DOING` is Notion-only and is preserved.
-  - **Priority:** Maps Notion select labels (`P1`–`P4`) to Todoist priority levels (`4`–`1`).
-  - **Dates:** Syncs task due dates accurately between both platforms.
-- **Conflict Resolution:** In the event of simultaneous changes on both sides, Todoist is treated as the source of truth.
-- **Deletion Handling:**
-  - Deleting a Notion page → deletes the corresponding Todoist task.
-  - Deleting a Todoist task → archives the corresponding Notion page.
-  - Completing a Todoist task → marks the Notion page as `Done`.
+## Features
 
-## Project Structure
+- **Two-way sync** of title, date, priority, status and Type.
+  - **Status:** `TO DO` / `DOING` / `Done` ↔ open / completed. `DOING` is Notion-only and is preserved.
+  - **Priority:** `P1`–`P4` ↔ Todoist `4`–`1`.
+  - **Dates:** synced as calendar days; times are kept unless the day changes.
+  - **Type ↔ Project:** `Personal` / `Professional` ↔ the Todoist project with the same name. Other projects sync with an empty Type; an empty Type goes to the Inbox.
+- **Conflict resolution:** field-level merge. Edits to different fields are both kept; if the same field changed on both sides, the later edit wins (tie → Todoist).
+- **Deletions both ways:** deleting a Notion page deletes the Todoist task; deleting a Todoist task archives the Notion page. Completing in Todoist marks the page `Done`.
+- **No duplicates:** existing pairs are relinked through the `Todoist ID` stored on each Notion page.
+- **Free-plan safe:** outbound requests, D1 queries and creates are capped per run, and work that doesn't fit continues in the next run. A D1 lock prevents overlapping runs.
 
-```
-notion-todoist-sync/
-├─ logs/                  # Runtime log output (gitignored)
-├─ src/
-│  ├─ index.js            # Entry point, polling scheduler
-│  ├─ syncEngine.js       # Orchestrates the 5-step sync cycle
-│  ├─ notionClient.js     # Notion API wrapper
-│  ├─ todoistClient.js    # Todoist API wrapper
-│  ├─ stateManager.js     # Persists sync state to disk
-│  └─ fieldMapper.js      # Normalizes data between both APIs
-├─ .env                   # API credentials (gitignored)
-├─ sync-state.json        # ID mapping state (gitignored)
-├─ start.bat              # Launches the engine, redirects output to logs/
-├─ start-silent.vbs       # Wraps start.bat to run with no visible window
-├─ view-log.bat           # Opens a live log viewer in terminal
-├─ package.json
-└─ README.md
-```
-
-## Technical Architecture
-
-The sync cycle runs every `POLL_INTERVAL_SECONDS` seconds and follows five steps:
-
-1. **Fetch** — Pull all active tasks from both Notion and Todoist APIs simultaneously.
-2. **Todoist → Notion CREATE** — For any Todoist task not yet in state, create a new Notion page.
-3. **Notion → Todoist CREATE** — For any Notion page not yet in state, create a new Todoist task.
-4. **UPDATE** — Compare current snapshots against last known state. Push changes to whichever side changed. If both changed, Todoist wins.
-5. **DELETIONS & COMPLETIONS** — Handle task deletions and completions on either side.
-
-State is saved to `sync-state.json` immediately after every create operation to prevent duplicate creation loops.
-
-## Notion Database Schema
-
-Your Notion database must have these exact properties:
+## Notion database schema
 
 | Property | Type | Values |
 |---|---|---|
 | `Tasks` | Title | Task name |
 | `Task Date` | Date | Due date |
 | `Priority` | Select | `P1`, `P2`, `P3`, `P4` |
-| `Status` | Status (native) | `TO DO`, `DOING`, `Done` |
+| `Status` | Status | `TO DO`, `DOING`, `Done` |
+| `Type` | Select | `Personal`, `Professional` |
+| `Todoist ID` | Text | Filled in by the sync |
 
-## Setup
+Todoist needs projects named exactly `Personal` and `Professional`.
 
-### 1. Prerequisites
-- [Notion Integration Token](https://www.notion.so/my-integrations) with access to your database.
-- [Todoist API Token](https://developer.todoist.com/app-console.html).
-- Node.js installed.
+## Quick start (local)
 
-### 2. Environment Variables
-Create a `.env` file in the root directory:
+Requires Node.js 22+.
+
+```bash
+npm install
+npm test                # unit tests, no network
+```
+
+To run the Worker locally against your real Notion and Todoist accounts, create `.dev.vars` (gitignored):
 
 ```env
 NOTION_TOKEN=secret_xxx
 NOTION_DATABASE_ID=xxx
 TODOIST_API_TOKEN=xxx
-POLL_INTERVAL_SECONDS=30
 ```
 
-### 3. Installation
+Then:
+
 ```bash
-npm install
+npx wrangler d1 migrations apply notion-todoist-sync --local
+npm run dev
+# in another terminal, trigger one sync run:
+curl "http://localhost:8787/__scheduled?cron=*+*+*+*+*"
 ```
 
-### 4. Running Manually
+Local runs change your real tasks. Don't run locally while the deployed Worker is active, since two syncs at once can duplicate tasks; the lock only covers runs that share the same database.
+
+## Deploy (summary)
+
 ```bash
-npm start
+npx wrangler login
+npx wrangler d1 create notion-todoist-sync     # put database_id in wrangler.toml
+npm run db:migrate
+npx wrangler secret put NOTION_TOKEN
+npx wrangler secret put NOTION_DATABASE_ID
+npx wrangler secret put TODOIST_API_TOKEN
+npm run deploy
+npx wrangler tail                              # watch it run
 ```
 
-## Windows Background Deployment
+The full walkthrough, with Notion and Todoist setup, verification and troubleshooting, is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-The engine is designed to run silently on Windows startup with no visible window.
+## Scripts
 
-### Files involved
-- **`start.bat`** — launches Node and pipes all output to `logs/app.log`. Clears the log on each restart.
-- **`start-silent.vbs`** — runs `start.bat` invisibly using `WScript.Shell` with window style `0`.
-- **`view-log.bat`** — opens a live log tail in a terminal using PowerShell's `Get-Content -Wait`.
+| Command | Purpose |
+|---|---|
+| `npm test` | Unit tests (`node --test`) |
+| `npm run check` | Bundle the Worker without deploying |
+| `npm run dev` | Local Worker with scheduled-trigger testing |
+| `npm run deploy` | Deploy to Cloudflare |
+| `npm run db:migrate` | Apply D1 migrations to the deployed database |
 
-### Task Scheduler Setup
-1. Open **Task Scheduler** → **Create Task**
-2. **General tab:**
-   - Name: `Notion Todoist Sync`
-   - Select **"Run only when user is logged on"**
-   - Check **"Run with highest privileges"**
-3. **Triggers tab:** New → At log on → Delay: `30 seconds`
-4. **Actions tab:** New → Start a program
-   - Program: `wscript.exe`
-   - Arguments: `"C:\Users\Rafi\notion-todoist-sync\start-silent.vbs"`
-5. **Conditions tab:** Uncheck **"Start only if on AC power"**
-6. **Settings tab:** Uncheck **"Stop the task if it runs longer than"**
+## Project structure
 
-### Viewing Logs
-Double-click `view-log.bat` from anywhere (desktop shortcut recommended) to open a live log viewer. Press `Ctrl+C` to close.
-
-Log location: `logs/app.log`
-
-### Verifying it's running
-Open Task Manager → **Details** tab → look for `node.exe`.
-
-## Key Implementation Notes
-
-- Todoist API endpoint: `/api/v1` (migrated from `/rest/v2`)
-- Notion `Status` is a native `status` type, not a `select` — requires different API handling
-- `DOING` status only exists in Notion; Todoist tasks are always either active or completed
-- Completed Todoist tasks are not available via the free plan API — completion is detected by absence from the active task list combined with the `is_completed` flag
+```
+├─ src/
+│  ├─ index.js            # Worker entry: scheduled sync + GET /health
+│  ├─ syncEngine.js       # Sync cycle: relink, create, merge, delete
+│  ├─ fieldMapper.js      # Field mapping, snapshots, field-level merge
+│  ├─ notionClient.js     # Notion REST API (Notion-Version 2022-06-28)
+│  ├─ todoistClient.js    # Todoist API v1
+│  ├─ stateManager.js     # D1 state row + run lock
+│  ├─ budget.js           # Outbound request cap (free plan)
+│  └─ http.js             # Request helper with 429 retry
+├─ migrations/            # D1 schema
+├─ scripts/import-state.js  # Optional import of the old sync-state.json
+├─ test/                  # Unit tests with fake clients
+├─ docs/                  # ARCHITECTURE.md, DEPLOYMENT.md
+└─ wrangler.toml          # Worker, cron and D1 configuration
+```

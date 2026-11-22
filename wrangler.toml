@@ -1,0 +1,18 @@
+name = "notion-todoist-sync"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+# Runs the sync once a minute (the minimum Cron Trigger interval).
+[triggers]
+crons = ["* * * * *"]
+
+# Sync state (Todoist ↔ Notion ID mapping + last known snapshots) and the run lock.
+# Created with `npx wrangler d1 create notion-todoist-sync` (region APAC).
+[[d1_databases]]
+binding = "DB"
+database_name = "notion-todoist-sync"
+database_id = "e5b2c2f8-d4be-4b06-a664-aac43e019536"
+migrations_dir = "migrations"
+
+[observability]
+enabled = true
