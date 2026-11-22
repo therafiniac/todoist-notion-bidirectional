@@ -91,6 +91,7 @@ Normalized task shape (used for comparison):
 - Todoist reopened → Notion `TO DO`.
 - Todoist active task changed → Notion keeps `DOING` if it was `DOING`.
 - Notion `Done` → Todoist task closed; Notion leaves `Done` → Todoist task reopened.
+- Todoist can't represent `DOING`, so the Todoist side is compared with `DOING` read as `TO DO`. Changing only `TO DO` ↔ `DOING` in Notion makes no Todoist call.
 
 ### Type ↔ Project
 
@@ -125,14 +126,19 @@ Normalized task shape (used for comparison):
 
 ### Deletions & completions
 
+Deleting on either side removes the task on the other side. Todoist has no task archive, so a Notion deletion deletes the Todoist task; a Todoist deletion archives the Notion page.
+
 | Notion page | Todoist task | Action |
 |---|---|---|
 | exists | completed | set Notion `Done` |
-| deleted/archived | active | delete Todoist task |
-| exists | absent from active and completed lists | archive Notion page (unless last known status was `Done`) |
+| deleted/archived | active or completed | delete Todoist task |
+| exists (not `Done`) | absent from active and completed lists | archive Notion page |
+| exists (`Done`) | absent, and its completion was seen less than 29 days ago | archive Notion page |
+| exists (`Done`) | absent, completion older or never seen | leave as is (it may have aged out of the 30-day completed list) |
 | deleted/archived | absent | remove from state |
 
-If the completed-tasks request fails, the run does not infer Todoist deletions, so a completion is never mistaken for a deletion.
+- If the completed-tasks request fails, the run does not infer Todoist deletions, so a completion is never mistaken for a deletion.
+- `todoistCompletedAt` is stored per task whenever the task appears in the completed list, and cleared when it is reopened.
 
 ## State
 
@@ -150,7 +156,8 @@ D1 table `sync_state`, row `id = 1`, column `data`:
         "priority": "P2",
         "status": "TO DO",
         "type": "Personal"
-      }
+      },
+      "todoistCompletedAt": "2026-11-20T08:00:00Z"
     }
   }
 }

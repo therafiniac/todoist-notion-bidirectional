@@ -13,8 +13,8 @@ A state-managed synchronization engine that keeps tasks in sync between a Notion
   - **Type ↔ Project:** Notion `Type` (`Personal` / `Professional`) maps to the Todoist project of the same name. Tasks in other Todoist projects sync with an empty Type; Notion pages with an empty Type go to the Todoist Inbox.
 - **Conflict Resolution:** When both sides change between runs, Todoist is the source of truth.
 - **Deletion Handling:**
-  - Deleting a Notion page → deletes the corresponding Todoist task.
-  - Deleting a Todoist task → archives the corresponding Notion page.
+  - Deleting a Notion page → deletes the corresponding Todoist task (active or completed).
+  - Deleting a Todoist task → archives the corresponding Notion page, including recently completed tasks.
   - Completing a Todoist task → marks the Notion page as `Done`.
 - **Free-plan safe:** Every API call is counted against the Workers Free limit of 50 subrequests per run; work that does not fit is deferred to the next run.
 - **No overlapping runs:** A D1 lock row ensures only one sync runs at a time.
