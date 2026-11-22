@@ -86,8 +86,8 @@ test('defers work beyond the subrequest budget instead of failing', async () => 
   const state = await sync(fakes, createFakeDb());
 
   assert.ok(fakes.budget.used <= 20);
-  // 4 fetches; each create reserves 3 but spends 2 (no close) → 7 fit in 20
-  assert.equal(Object.keys(state.tasks).length, 7);
+  // 4 fetches, then 2 per create → 8 fit in 20
+  assert.equal(Object.keys(state.tasks).length, 8);
 });
 
 test('lock prevents overlapping runs and is released', async () => {
@@ -146,4 +146,13 @@ test('does not archive when the completed list is unavailable', async () => {
 
   assert.ok(!fakes.names().includes('notion.deletePage'));
   assert.ok(state.tasks['7']);
+});
+
+test('unlinked Notion pages already Done are not created in Todoist', async () => {
+  const fakes = createFakes({
+    notionPages: [notionPage({ id: 'p1', title: 'Finished', status: 'Done' })],
+  });
+  const state = await sync(fakes, createFakeDb());
+  assert.ok(!fakes.names().includes('todoist.createTask'));
+  assert.deepEqual(state.tasks, {});
 });
