@@ -197,6 +197,7 @@ async function syncNotionToTodoist(ctx, notionPages, createdThisCycle) {
 }
 
 // ─── Handle Updates ───────────────────────────────────────────────────────────
+// Field-level merge of each linked pair, then push only what differs per side.
 async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
   const { state } = ctx;
   for (const [todoistId, entry] of Object.entries(state.tasks)) {
@@ -205,103 +206,95 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
 
     if (!todoistTask || !notionPage) continue;
 
-    const todoistNormalized = fieldMapper.fromTodoist(
-      todoistTask,
-      ctx.projects.names,
+    const todoistSnapshot = fieldMapper.toSnapshot(
+      fieldMapper.fromTodoist(todoistTask, ctx.projects.names),
     );
-    const notionNormalized = fieldMapper.fromNotion(notionPage);
-    const todoistSnapshot = fieldMapper.toSnapshot(todoistNormalized);
-    const notionSnapshot = fieldMapper.toSnapshot(notionNormalized);
+    const notionSnapshot = fieldMapper.toSnapshot(fieldMapper.fromNotion(notionPage));
     const oldSnapshot = entry.lastKnownState;
     // State saved before Type was synced has no `type`. Use Todoist's value as
     // the baseline so a differing Notion Type reads as a Notion change: Notion's
     // existing Type is kept and the Todoist task is moved to match.
-    if (!('type' in oldSnapshot)) oldSnapshot.type = todoistNormalized.type;
+    if (!('type' in oldSnapshot)) oldSnapshot.type = todoistSnapshot.type;
 
-    const todoistChanged = !fieldMapper.snapshotsAreEqual(
-      fieldMapper.asTodoistSees(oldSnapshot),
+    const { merged, conflicts } = fieldMapper.mergeSnapshots({
+      old: oldSnapshot,
+      notion: notionSnapshot,
+      todoist: todoistSnapshot,
+      notionEditedAt: notionPage.last_edited_time,
+      todoistEditedAt: todoistTask.updated_at,
+    });
+
+    const notionNeedsUpdate = !fieldMapper.snapshotsAreEqual(merged, notionSnapshot);
+    const todoistNeedsUpdate = !fieldMapper.snapshotsAreEqual(
+      fieldMapper.asTodoistSees(merged),
       todoistSnapshot,
     );
-    const notionChanged = !fieldMapper.snapshotsAreEqual(
-      oldSnapshot,
-      notionSnapshot,
-    );
 
-    if (todoistChanged) {
-      // Todoist changed (alone, or both changed → conflict, Todoist wins) → push to Notion
-      if (!canAfford(ctx, COST.updateNotion)) continue;
-      const label = notionChanged ? '⚠️  CONFLICT → Todoist wins' : '✏️  Todoist→Notion UPDATE';
-      try {
-        const properties = fieldMapper.toNotionProperties(
-          todoistNormalized,
-          oldSnapshot.status,
-        );
-        await ctx.notion.updatePage(entry.notionPageId, properties);
-        // Record the status Notion actually has now (DOING is kept if Todoist is active)
-        entry.lastKnownState = {
-          ...todoistSnapshot,
-          status: properties.Status.status.name,
-        };
+    if (!notionNeedsUpdate && !todoistNeedsUpdate) {
+      // e.g. only TO DO ↔ DOING changed in Notion: nothing to push, just record it
+      if (!fieldMapper.snapshotsAreEqual(merged, oldSnapshot)) {
+        entry.lastKnownState = merged;
         await saveState(ctx.db, state);
-        console.log(`  ${label}: "${todoistNormalized.title}"`);
-      } catch (err) {
-        console.error(
-          `  ❌ Update Notion failed for "${todoistNormalized.title}":`,
-          err.message,
-        );
       }
-    } else if (notionChanged) {
-      // Only TO DO ↔ DOING changed: nothing Todoist can show, just record it
-      if (
-        fieldMapper.snapshotsAreEqual(
-          fieldMapper.asTodoistSees(oldSnapshot),
-          fieldMapper.asTodoistSees(notionSnapshot),
-        )
-      ) {
-        entry.lastKnownState = notionSnapshot;
-        await saveState(ctx.db, state);
-        continue;
+      continue;
+    }
+
+    const cost =
+      (notionNeedsUpdate ? COST.updateNotion : 0) +
+      (todoistNeedsUpdate ? COST.updateTodoist : 0);
+    if (!canAfford(ctx, cost)) continue;
+
+    const typeChanged = merged.type !== todoistSnapshot.type;
+    const targetProjectId = typeChanged ? projectIdForType(ctx, merged.type) : null;
+    if (todoistNeedsUpdate && targetProjectId === undefined) {
+      console.error(
+        `  ⚠️  No Todoist project for Type "${merged.type ?? 'empty (Inbox)'}"; skipping "${merged.title}"`,
+      );
+      continue;
+    }
+
+    try {
+      if (todoistNeedsUpdate) {
+        await pushToTodoist(ctx, todoistId, merged, todoistSnapshot, targetProjectId);
       }
-
-      // Notion changed → push to Todoist
-      if (!canAfford(ctx, COST.updateTodoist)) continue;
-      try {
-        const typeChanged = (oldSnapshot.type ?? null) !== notionNormalized.type;
-        const targetProjectId = typeChanged
-          ? projectIdForType(ctx, notionNormalized.type)
-          : null;
-        if (targetProjectId === undefined) {
-          console.error(
-            `  ⚠️  No Todoist project for Type "${notionNormalized.type ?? 'empty (Inbox)'}"; skipping "${notionNormalized.title}"`,
-          );
-          continue;
-        }
-
-        const payload = fieldMapper.toTodoistPayload(notionNormalized);
-        await ctx.todoist.updateTask(todoistId, payload);
-        if (targetProjectId) {
-          await ctx.todoist.moveTask(todoistId, targetProjectId);
-        }
-
-        const wasCompleted = oldSnapshot.status === 'Done';
-        const isNowCompleted = notionNormalized.status === 'Done';
-        if (!wasCompleted && isNowCompleted) {
-          await ctx.todoist.closeTask(todoistId);
-        } else if (wasCompleted && !isNowCompleted) {
-          await ctx.todoist.reopenTask(todoistId);
-        }
-
-        entry.lastKnownState = notionSnapshot;
-        await saveState(ctx.db, state);
-        console.log(`  ✏️  Notion→Todoist UPDATE: "${notionNormalized.title}"`);
-      } catch (err) {
-        console.error(
-          `  ❌ Update Todoist failed for "${notionNormalized.title}":`,
-          err.message,
+      if (notionNeedsUpdate) {
+        await ctx.notion.updatePage(
+          entry.notionPageId,
+          fieldMapper.toNotionProperties(merged),
         );
       }
+      entry.lastKnownState = merged;
+      await saveState(ctx.db, state);
+
+      const direction = [
+        notionNeedsUpdate && 'Notion',
+        todoistNeedsUpdate && 'Todoist',
+      ].filter(Boolean).join(' + ');
+      const conflictNote = conflicts.length
+        ? ` (conflict on ${conflicts.join(', ')}: later edit kept)`
+        : '';
+      console.log(`  ✏️  UPDATE ${direction}: "${merged.title}"${conflictNote}`);
+    } catch (err) {
+      console.error(`  ❌ Update failed for "${merged.title}":`, err.message);
     }
   }
+}
+
+// Sends only the Todoist calls needed to make the task match the merged snapshot.
+async function pushToTodoist(ctx, todoistId, merged, current, targetProjectId) {
+  const fieldsChanged = ['title', 'taskDate', 'priority'].some(
+    (field) => (merged[field] ?? null) !== (current[field] ?? null),
+  );
+  if (fieldsChanged) {
+    await ctx.todoist.updateTask(todoistId, fieldMapper.toTodoistPayload(merged));
+  }
+  if (targetProjectId) {
+    await ctx.todoist.moveTask(todoistId, targetProjectId);
+  }
+  const shouldBeDone = merged.status === 'Done';
+  const isDone = current.status === 'Done';
+  if (shouldBeDone && !isDone) await ctx.todoist.closeTask(todoistId);
+  if (!shouldBeDone && isDone) await ctx.todoist.reopenTask(todoistId);
 }
 
 // ─── Deletions & Completions ──────────────────────────────────────────────────
