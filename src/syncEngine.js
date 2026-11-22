@@ -33,16 +33,19 @@ export async function runSync(ctx) {
     notionPages.filter((p) => !p.archived).map((p) => [p.id, p]),
   );
 
+  const activeTodoistMap = new Map(
+    todoistActiveTasks.map((t) => [String(t.id), t]),
+  );
+
   // Combined todoist map: active + recently completed
   const allTodoistMap = new Map(
     todoistActiveTasks.map((t) => [String(t.id), t]),
   );
-  for (const t of todoistCompletedTasks) {
-    allTodoistMap.set(String(t.id), t);
+  // null = completed list unavailable this run; deletions are then not inferred
+  const completedKnown = todoistCompletedTasks !== null;
+  for (const t of todoistCompletedTasks || []) {
+    if (!activeTodoistMap.has(String(t.id))) allTodoistMap.set(String(t.id), t);
   }
-  const activeTodoistMap = new Map(
-    todoistActiveTasks.map((t) => [String(t.id), t]),
-  );
 
   // Track IDs created this cycle to skip in deletion check
   const createdThisCycle = new Set();
@@ -63,6 +66,7 @@ export async function runSync(ctx) {
     activeTodoistMap,
     allTodoistMap,
     createdThisCycle,
+    completedKnown,
   );
 
   // 6. Save final state
@@ -230,6 +234,7 @@ async function handleDeletionsAndCompletions(
   activeTodoistMap,
   allTodoistMap,
   createdThisCycle,
+  completedKnown,
 ) {
   const { state } = ctx;
   for (const [todoistId, entry] of Object.entries(state.tasks)) {
@@ -238,7 +243,8 @@ async function handleDeletionsAndCompletions(
     const notionExists = activeNotionMap.has(entry.notionPageId);
     const isActiveInTodoist = activeTodoistMap.has(todoistId);
     const isCompletedInTodoist =
-      allTodoistMap.has(todoistId) && allTodoistMap.get(todoistId).is_completed;
+      allTodoistMap.has(todoistId) &&
+      fieldMapper.isTodoistTaskCompleted(allTodoistMap.get(todoistId));
 
     // ── Todoist task was COMPLETED (not deleted) → update Notion to DONE ──
     if (!isActiveInTodoist && isCompletedInTodoist && notionExists) {
@@ -277,8 +283,10 @@ async function handleDeletionsAndCompletions(
     }
 
     // ── Todoist task truly deleted (not completed) → archive Notion page ──
-    // Skip if last known status was already Done — it was completed intentionally
+    // Skip if last known status was already Done — it was completed intentionally.
+    // Skip if the completed list could not be fetched — it may just be completed.
     if (
+      completedKnown &&
       !isActiveInTodoist &&
       !isCompletedInTodoist &&
       notionExists &&
@@ -297,7 +305,7 @@ async function handleDeletionsAndCompletions(
     }
 
     // ── Both gone → clean up state ──
-    if (!notionExists && !isActiveInTodoist && !isCompletedInTodoist) {
+    if (completedKnown && !notionExists && !isActiveInTodoist && !isCompletedInTodoist) {
       delete state.tasks[todoistId];
       await saveState(ctx.db, state);
     }
