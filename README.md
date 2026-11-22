@@ -21,6 +21,8 @@ A state-managed synchronization engine that keeps tasks in sync between a Notion
 
 ## Project Structure
 
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the sync design and all field mapping values.
+
 ```
 notion-todoist-sync/
 ├─ src/
@@ -32,6 +34,8 @@ notion-todoist-sync/
 │  ├─ fieldMapper.js      # Normalizes data between both APIs
 │  ├─ budget.js           # Subrequest counter (free plan limit)
 │  └─ http.js             # Shared fetch/JSON/error helper
+├─ docs/
+│  └─ ARCHITECTURE.md     # Design, sync rules, field mapping values
 ├─ migrations/            # D1 schema
 ├─ scripts/
 │  └─ import-state.js     # One-time import of an old sync-state.json

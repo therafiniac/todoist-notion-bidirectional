@@ -1,0 +1,187 @@
+# Architecture
+
+## Overview
+
+```
+                 Cloudflare Workers (free plan)
+ ┌──────────────────────────────────────────────────────────┐
+ │  Cron Trigger "* * * * *"                                │
+ │        │                                                 │
+ │        ▼                                                 │
+ │  index.js scheduled()                                    │
+ │    ├─ acquire D1 lock ──────────────┐                    │
+ │    ├─ load state ─────────────────┐ │                    │
+ │    ├─ syncEngine.runSync()        │ │                    │
+ │    │    ├─ notionClient ──────────┼─┼──► Notion API      │
+ │    │    └─ todoistClient ─────────┼─┼──► Todoist API v1  │
+ │    └─ release lock                ▼ ▼                    │
+ │                              D1: sync_state, sync_lock   │
+ └──────────────────────────────────────────────────────────┘
+```
+
+- **Trigger:** Cron Trigger every minute (minimum interval).
+- **State:** Cloudflare D1, a single JSON row. D1 is strongly consistent, so a run always sees the previous run's writes. KV was rejected because its up-to-60s propagation delay could let a run read stale state and create duplicates.
+- **APIs:** plain `fetch`, no SDKs. Notion uses `Notion-Version: 2022-06-28`; Todoist uses `/api/v1`.
+- **Secrets:** `NOTION_TOKEN`, `NOTION_DATABASE_ID`, `TODOIST_API_TOKEN` (Worker secrets).
+
+## Components
+
+| File | Responsibility |
+|---|---|
+| `src/index.js` | Worker entry. `scheduled()` validates secrets, takes the lock, runs the sync. `fetch()` serves `GET /health` only. |
+| `src/syncEngine.js` | The sync cycle: fetch, create, update, delete/complete. |
+| `src/fieldMapper.js` | Converts Notion pages and Todoist tasks to a common shape and back. All mapping values live here. |
+| `src/notionClient.js` | Notion REST calls: query database, create/update/archive page. |
+| `src/todoistClient.js` | Todoist calls: tasks (paginated), completed tasks, projects, create/update/move/close/reopen/delete. |
+| `src/stateManager.js` | D1 state row read/write and the run lock. |
+| `src/budget.js` | Counts outbound requests against the free-plan limit. |
+| `src/http.js` | Shared request helper: JSON parsing and error messages. |
+
+## Sync Cycle
+
+1. **Fetch** (4 requests minimum): Notion database pages, Todoist active tasks, Todoist tasks completed in the last 30 days, Todoist projects.
+2. **Todoist → Notion create:** each Todoist task not in state becomes a Notion page (with `Todoist ID` set).
+3. **Notion → Todoist create:** each Notion page not in state becomes a Todoist task in the project for its Type.
+4. **Update:** for each linked pair, compare both sides to the last known snapshot and push the side that changed.
+5. **Deletions & completions:** handle tasks missing on either side.
+6. **Save state** and record `lastSyncedAt`.
+
+State is also saved right after each create, so a failure later in the run cannot cause a duplicate.
+
+## Field Mapping
+
+Normalized task shape (used for comparison):
+
+```js
+{ title, taskDate, priority, status, type }
+```
+
+### Title
+
+| Notion | Todoist |
+|---|---|
+| `Tasks` (Title) | `content` |
+
+### Date
+
+| Notion | Todoist |
+|---|---|
+| `Task Date` → `date.start` | `due.date` (read) / `due_date` (write) |
+| empty | no due date |
+
+### Priority
+
+| Notion `Priority` (Select) | Todoist `priority` | Todoist app label |
+|---|---|---|
+| `P1` | `4` | p1 (urgent) |
+| `P2` | `3` | p2 |
+| `P3` | `2` | p3 |
+| `P4` | `1` | p4 (normal) |
+| empty | `1` | p4 |
+
+### Status
+
+| Notion `Status` (Status) | Todoist |
+|---|---|
+| `TO DO` | active (`checked: false`) |
+| `DOING` | active (`checked: false`); Notion-only, kept when Todoist is active |
+| `Done` | completed (`checked: true`) |
+
+- Todoist completed → Notion `Done`.
+- Todoist reopened → Notion `TO DO`.
+- Todoist active task changed → Notion keeps `DOING` if it was `DOING`.
+- Notion `Done` → Todoist task closed; Notion leaves `Done` → Todoist task reopened.
+
+### Type ↔ Project
+
+| Notion `Type` (Select) | Todoist project |
+|---|---|
+| `Personal` | project named `Personal` |
+| `Professional` | project named `Professional` |
+| empty | Inbox (when created from Notion) |
+| empty | any other project (when the task is in one) |
+
+- Matching is by exact, case-sensitive project name.
+- Changing Type in Notion moves the Todoist task (`POST /tasks/{id}/move`). Clearing it moves the task to the Inbox.
+- Moving a task between Todoist projects updates Type (empty for projects other than the two above).
+- If the `Personal` or `Professional` project doesn't exist, tasks needing it are skipped and a warning is logged.
+
+### Link
+
+| Notion | Todoist |
+|---|---|
+| `Todoist ID` (Text) | task `id` |
+
+## Sync Rules
+
+### Updates (linked pairs)
+
+| Notion changed | Todoist changed | Action |
+|---|---|---|
+| no | no | nothing |
+| yes | no | push Notion → Todoist (update, move project, close/reopen) |
+| no | yes | push Todoist → Notion |
+| yes | yes | conflict: Todoist wins, pushed to Notion |
+
+### Deletions & completions
+
+| Notion page | Todoist task | Action |
+|---|---|---|
+| exists | completed | set Notion `Done` |
+| deleted/archived | active | delete Todoist task |
+| exists | absent from active and completed lists | archive Notion page (unless last known status was `Done`) |
+| deleted/archived | absent | remove from state |
+
+If the completed-tasks request fails, the run does not infer Todoist deletions, so a completion is never mistaken for a deletion.
+
+## State
+
+D1 table `sync_state`, row `id = 1`, column `data`:
+
+```json
+{
+  "lastSyncedAt": "2026-11-22T10:00:00.000Z",
+  "tasks": {
+    "<todoistTaskId>": {
+      "notionPageId": "<notionPageId>",
+      "lastKnownState": {
+        "title": "Pay rent",
+        "taskDate": "2026-11-30",
+        "priority": "P2",
+        "status": "TO DO",
+        "type": "Personal"
+      }
+    }
+  }
+}
+```
+
+State from before Type sync has no `type`. On the first run the Notion value is kept and the Todoist task is moved to match.
+
+D1 table `sync_lock` (row `id = 1`, `locked_until` epoch ms) ensures only one run at a time. A run that crashes frees the lock after 5 minutes.
+
+## Free-Plan Limits
+
+| Limit | Free | How it's handled |
+|---|---|---|
+| Subrequests per run | 50 | `budget.js` caps at 45 |
+| CPU time per run | 10 ms | Network waits don't count; the run is mostly I/O |
+| Requests per day | 100,000 | 1,440 cron runs/day |
+| D1 writes per day | 100,000 | ~1 per run + 1 per change |
+
+Worst-case requests per operation (an operation starts only if the budget covers it; otherwise it waits for the next run):
+
+| Operation | Requests |
+|---|---|
+| Create in Notion | 1 |
+| Create in Todoist | 3 (create, close if Done, write Todoist ID) |
+| Update Notion | 1 |
+| Update Todoist | 3 (update, move project, close/reopen) |
+| Delete/archive | 1 |
+
+## Future: Webhooks
+
+The cron design can later get webhook-triggered runs for near-instant sync. Todoist webhooks and Notion API webhook subscriptions are both free. The plan:
+- Add a `fetch()` route that verifies signatures (`X-Todoist-Hmac-SHA256`, `X-Notion-Signature`) and runs `runSync()`.
+- Keep a slower cron (e.g. every 30 minutes) as a fallback for missed events.
+- The existing D1 lock already stops overlapping runs.
