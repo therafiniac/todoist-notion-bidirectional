@@ -4,7 +4,9 @@
 export const DEFAULT_SUBREQUEST_LIMIT = 45;
 
 export class SubrequestBudget {
-  constructor(limit = DEFAULT_SUBREQUEST_LIMIT, fetchImpl = fetch) {
+  // The default wraps the global fetch: calling it as `this.fetchImpl(...)` would
+  // bind `this` to the budget, which Workers rejects with "Illegal invocation".
+  constructor(limit = DEFAULT_SUBREQUEST_LIMIT, fetchImpl = (url, init) => fetch(url, init)) {
     this.limit = limit;
     this.used = 0;
     this.fetchImpl = fetchImpl;
