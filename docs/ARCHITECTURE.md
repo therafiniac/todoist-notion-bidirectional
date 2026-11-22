@@ -189,7 +189,7 @@ D1 table `sync_lock` (row `id = 1`, `locked_until` epoch ms) ensures only one ru
 | Requests per day | 100,000 | 1,440 cron runs/day |
 | D1 queries per run | 50 | ≤ ~30: lock, load, ≤ 25 creates, save, unlock |
 | D1 rows written per day | 100,000 | ~3 per run (lock, save, unlock) + 1 per create ≈ 4,500/day |
-| D1 rows read per day | 5 million | ~2 per run |
+| D1 rows read per day | 5 million | a few per run (a few thousand / day) |
 | D1 storage | 500 MB per database | a few KB |
 
 A request rate-limited with `429` is retried once after its `Retry-After` delay (capped at 5 s), only if the budget still allows it. If it fails again, that operation waits for the next run.
