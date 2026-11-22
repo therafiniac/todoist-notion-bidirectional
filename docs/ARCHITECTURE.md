@@ -67,7 +67,9 @@ Normalized task shape (used for comparison):
 | Notion | Todoist |
 |---|---|
 | `Task Date` → `date.start` | `due.date` (read) / `due_date` (write) |
-| empty | no due date |
+| empty | no due date (cleared with `due_string: "no date"`) |
+
+Updates send Todoist only the fields that changed, so editing a title never re-sends the due date and a recurring due date is kept.
 
 ### Priority
 

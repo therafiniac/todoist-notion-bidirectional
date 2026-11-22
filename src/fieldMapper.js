@@ -123,6 +123,22 @@ export function toTodoistPayload(normalized) {
   return payload;
 }
 
+// Update payload with only the fields that changed. Unchanged fields are left out
+// so Todoist keeps them as they are (e.g. a recurring due date isn't re-sent).
+// Todoist v1 has no documented null for due dates; "no date" clears it (as in v2).
+export function toTodoistUpdatePayload(merged, current) {
+  const payload = {};
+  if (merged.title !== current.title) payload.content = merged.title;
+  if (merged.priority !== current.priority) {
+    payload.priority = PRIORITY_NOTION_TO_TODOIST[merged.priority] || 1;
+  }
+  if ((merged.taskDate ?? null) !== (current.taskDate ?? null)) {
+    if (merged.taskDate) payload.due_date = merged.taskDate;
+    else payload.due_string = 'no date';
+  }
+  return payload;
+}
+
 // ─── Snapshot for state comparison ───────────────────────────────────────────
 // Always uses status string (never isCompleted boolean) so both sides compare equally
 export function toSnapshot(normalized) {

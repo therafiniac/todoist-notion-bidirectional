@@ -282,11 +282,9 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
 
 // Sends only the Todoist calls needed to make the task match the merged snapshot.
 async function pushToTodoist(ctx, todoistId, merged, current, targetProjectId) {
-  const fieldsChanged = ['title', 'taskDate', 'priority'].some(
-    (field) => (merged[field] ?? null) !== (current[field] ?? null),
-  );
-  if (fieldsChanged) {
-    await ctx.todoist.updateTask(todoistId, fieldMapper.toTodoistPayload(merged));
+  const payload = fieldMapper.toTodoistUpdatePayload(merged, current);
+  if (Object.keys(payload).length > 0) {
+    await ctx.todoist.updateTask(todoistId, payload);
   }
   if (targetProjectId) {
     await ctx.todoist.moveTask(todoistId, targetProjectId);

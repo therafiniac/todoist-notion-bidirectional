@@ -79,8 +79,7 @@ test('engine pushes each side only the other side\'s changes', async () => {
   }
 
   const todoistUpdate = fakes.calls.find((c) => c.name === 'todoist.updateTask');
-  assert.equal(todoistUpdate.args[1].content, 'Renamed in Notion');
-  assert.equal(todoistUpdate.args[1].priority, 4);
+  assert.deepEqual(todoistUpdate.args[1], { content: 'Renamed in Notion' });
   const notionUpdate = fakes.calls.find((c) => c.name === 'notion.updatePage');
   assert.equal(notionUpdate.args[1].Tasks.title[0].text.content, 'Renamed in Notion');
   assert.equal(notionUpdate.args[1].Priority.select.name, 'P1');
