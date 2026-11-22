@@ -49,6 +49,7 @@ notion-todoist-sync/
 Each run (every minute) follows five steps:
 
 1. **Fetch** — Pull all tasks from both Notion and Todoist.
+1a. **Relink** — Link Notion pages to existing Todoist tasks via the stored `Todoist ID` (prevents duplicates after a fresh deploy).
 2. **Todoist → Notion CREATE** — For any Todoist task not yet in state, create a new Notion page.
 3. **Notion → Todoist CREATE** — For any Notion page not yet in state, create a new Todoist task.
 4. **UPDATE** — Merge both sides field by field against the last known state and push only the differences. Same field changed on both sides → later edit wins.
@@ -101,7 +102,7 @@ npx wrangler secret put TODOIST_API_TOKEN
 ```
 
 ### 5. (Optional) Import state from the old local setup
-Skip this on a fresh start. If you have a `sync-state.json` from the previous Windows setup, import it so existing tasks are not duplicated:
+Without it, existing pairs are relinked automatically through each Notion page's `Todoist ID`, so nothing is duplicated. Importing still keeps the exact last-known snapshots from the old setup:
 ```bash
 node scripts/import-state.js path/to/sync-state.json > /tmp/state-import.sql
 npx wrangler d1 execute notion-todoist-sync --remote --file=/tmp/state-import.sql

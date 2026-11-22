@@ -40,11 +40,12 @@
 ## Sync Cycle
 
 1. **Fetch** (4 requests minimum): Notion database pages, Todoist active tasks, Todoist tasks completed in the last 30 days, Todoist projects.
-2. **Todoist → Notion create:** each Todoist task not in state becomes a Notion page (with `Todoist ID` set).
-3. **Notion → Todoist create:** each Notion page not in state becomes a Todoist task in the project for its Type.
-4. **Update:** for each linked pair, merge both sides field by field against the last known snapshot, then push to each side only what differs.
-5. **Deletions & completions:** handle tasks missing on either side.
-6. **Save state** and record `lastSyncedAt`.
+2. **Relink:** a Notion page not in state whose `Todoist ID` matches an unlinked Todoist task (active or completed) is linked instead of duplicated. This covers a fresh deploy without imported state, or lost state. Where the two differ, the Notion value is kept and pushed to Todoist.
+3. **Todoist → Notion create:** each Todoist task not in state becomes a Notion page (with `Todoist ID` set).
+4. **Notion → Todoist create:** each Notion page not in state becomes a Todoist task in the project for its Type. A page that already has a `Todoist ID` but could not be relinked (its task was deleted, completed more than 30 days ago, or is linked to another page) is not recreated.
+5. **Update:** for each linked pair, merge both sides field by field against the last known snapshot, then push to each side only what differs.
+6. **Deletions & completions:** handle tasks missing on either side.
+7. **Save state** and record `lastSyncedAt`.
 
 State is also saved right after each create, so a failure later in the run cannot cause a duplicate.
 
