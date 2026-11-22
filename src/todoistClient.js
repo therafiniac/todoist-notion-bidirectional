@@ -2,7 +2,7 @@ import { requestJson } from './http.js';
 
 const BASE_URL = 'https://api.todoist.com/api/v1';
 const PAGE_LIMIT = 200; // API maximum
-const COMPLETED_WINDOW_DAYS = 30; // endpoint allows up to 3 months
+export const COMPLETED_WINDOW_DAYS = 30; // endpoint allows up to 3 months
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Normalize response — list endpoints return { results: [] } (completed: { items: [] })

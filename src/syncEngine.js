@@ -1,5 +1,6 @@
 import * as fieldMapper from './fieldMapper.js';
 import { todoistIdProperty } from './notionClient.js';
+import { COMPLETED_WINDOW_DAYS } from './todoistClient.js';
 import { saveState, findByNotionId, findByTodoistId } from './stateManager.js';
 
 // Worst-case subrequests each operation needs. An operation only starts if the
@@ -101,6 +102,17 @@ function buildProjectIndex(projects) {
 function projectIdForType(ctx, type) {
   if (!type) return ctx.projects.inboxId ?? undefined;
   return ctx.projects.idByType[type];
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// A completed task we saw recently should still be in the completed list. If it
+// is gone, it was deleted. Older completions may have aged out of the list, so
+// they are left alone. One day of margin guards against the window boundary.
+function completionStillInWindow(completedAt, now = Date.now()) {
+  if (!completedAt) return false;
+  const age = now - new Date(completedAt).getTime();
+  return age < (COMPLETED_WINDOW_DAYS - 1) * DAY_MS;
 }
 
 function canAfford(ctx, cost) {
@@ -311,6 +323,18 @@ async function handleDeletionsAndCompletions(
       allTodoistMap.has(todoistId) &&
       fieldMapper.isTodoistTaskCompleted(allTodoistMap.get(todoistId));
 
+    // Remember when the task was completed, to tell deletion from aging out later
+    const completedAt = isCompletedInTodoist
+      ? allTodoistMap.get(todoistId).completed_at || entry.todoistCompletedAt || new Date().toISOString()
+      : null;
+    if (isCompletedInTodoist && entry.todoistCompletedAt !== completedAt) {
+      entry.todoistCompletedAt = completedAt;
+      await saveState(ctx.db, state);
+    } else if (isActiveInTodoist && entry.todoistCompletedAt) {
+      delete entry.todoistCompletedAt;
+      await saveState(ctx.db, state);
+    }
+
     // ── Todoist task was COMPLETED (not deleted) → update Notion to DONE ──
     if (!isActiveInTodoist && isCompletedInTodoist && notionExists) {
       if (entry.lastKnownState?.status === 'Done') continue;
@@ -330,8 +354,8 @@ async function handleDeletionsAndCompletions(
       continue;
     }
 
-    // ── Notion page deleted → delete Todoist task ──
-    if (!notionExists && isActiveInTodoist) {
+    // ── Notion page deleted → delete Todoist task (active or completed) ──
+    if (!notionExists && (isActiveInTodoist || isCompletedInTodoist)) {
       if (!canAfford(ctx, COST.delete)) continue;
       try {
         await ctx.todoist.deleteTask(todoistId);
@@ -347,16 +371,16 @@ async function handleDeletionsAndCompletions(
       continue;
     }
 
-    // ── Todoist task truly deleted (not completed) → archive Notion page ──
-    // Skip if last known status was already Done — it was completed intentionally.
+    // ── Todoist task deleted → archive Notion page ──
     // Skip if the completed list could not be fetched — it may just be completed.
-    if (
-      completedKnown &&
-      !isActiveInTodoist &&
-      !isCompletedInTodoist &&
-      notionExists &&
-      entry.lastKnownState?.status !== 'Done'
-    ) {
+    // A Done task is only treated as deleted if its completion is recent enough
+    // that it should still be in the completed list.
+    const goneFromTodoist = completedKnown && !isActiveInTodoist && !isCompletedInTodoist;
+    const deletedInTodoist =
+      goneFromTodoist &&
+      (entry.lastKnownState?.status !== 'Done' ||
+        completionStillInWindow(entry.todoistCompletedAt));
+    if (deletedInTodoist && notionExists) {
       if (!canAfford(ctx, COST.delete)) continue;
       try {
         await ctx.notion.deletePage(entry.notionPageId);
@@ -370,7 +394,7 @@ async function handleDeletionsAndCompletions(
     }
 
     // ── Both gone → clean up state ──
-    if (completedKnown && !notionExists && !isActiveInTodoist && !isCompletedInTodoist) {
+    if (goneFromTodoist && !notionExists) {
       delete state.tasks[todoistId];
       await saveState(ctx.db, state);
     }
