@@ -161,11 +161,15 @@ async function relinkByTodoistId(ctx, notionPages, allTodoistMap) {
       continue;
     }
 
+    const notionSnapshot = fieldMapper.toSnapshot(fieldMapper.fromNotion(page));
     state.tasks[todoistId] = {
       notionPageId: page.id,
-      lastKnownState: fieldMapper.toSnapshot(
-        fieldMapper.fromTodoist(task, ctx.projects.names),
-      ),
+      lastKnownState: {
+        ...fieldMapper.toSnapshot(fieldMapper.fromTodoist(task, ctx.projects.names)),
+        // Description/Tags may be unfilled in Notion: let Todoist's values through
+        description: notionSnapshot.description,
+        tags: notionSnapshot.tags,
+      },
     };
     linked += 1;
   }
@@ -273,6 +277,11 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
     // the baseline so a differing Notion Type reads as a Notion change: Notion's
     // existing Type is kept and the Todoist task is moved to match.
     if (!('type' in oldSnapshot)) oldSnapshot.type = todoistSnapshot.type;
+    // Description and Tags were added to Notion later and start empty there. Use
+    // Notion's value as the baseline so existing Todoist descriptions and labels
+    // flow into Notion instead of being cleared.
+    if (!('description' in oldSnapshot)) oldSnapshot.description = notionSnapshot.description;
+    if (!('tags' in oldSnapshot)) oldSnapshot.tags = notionSnapshot.tags;
 
     const { merged, conflicts } = fieldMapper.mergeSnapshots({
       old: oldSnapshot,
@@ -312,7 +321,14 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
 
     try {
       if (todoistNeedsUpdate) {
-        await pushToTodoist(ctx, todoistId, merged, todoistSnapshot, targetProjectId);
+        await pushToTodoist(
+          ctx,
+          todoistId,
+          merged,
+          todoistSnapshot,
+          targetProjectId,
+          todoistTask.labels,
+        );
       }
       if (notionNeedsUpdate) {
         await ctx.notion.updatePage(
@@ -337,8 +353,8 @@ async function handleUpdates(ctx, allTodoistMap, activeNotionMap) {
 }
 
 // Sends only the Todoist calls needed to make the task match the merged snapshot.
-async function pushToTodoist(ctx, todoistId, merged, current, targetProjectId) {
-  const payload = fieldMapper.toTodoistUpdatePayload(merged, current);
+async function pushToTodoist(ctx, todoistId, merged, current, targetProjectId, currentLabels) {
+  const payload = fieldMapper.toTodoistUpdatePayload(merged, current, currentLabels);
   if (Object.keys(payload).length > 0) {
     await ctx.todoist.updateTask(todoistId, payload);
   }
